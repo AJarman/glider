@@ -1,0 +1,19 @@
+All third-party assets here are CC0 1.0 (public domain).
+
+characters/  Universal Base Characters [Standard] by Quaternius
+             https://quaternius.itch.io/universal-base-characters
+nature/      Stylized Nature MegaKit [Standard] by Quaternius
+             https://quaternius.itch.io/stylized-nature-megakit
+textures/    Plank Flooring 02 and Metal Plate from Poly Haven
+             https://polyhaven.com/a/plank_flooring_02
+             https://polyhaven.com/a/metal_plate
+
+fonts/       Dela Gothic One, SIL Open Font License 1.1 (see fonts/OFL.txt)
+             https://github.com/syakuzen/DelaGothic
+sfx/         Synthesised for this game by tools/make_sfx.py
+
+music/       Midnight Cruiser, Empty Stretch and Detour by Zane Little Music,
+             from New Peach Radio, CC0 1.0 (public domain)
+             https://opengameart.org/content/midnight-cruiser
+             https://opengameart.org/content/empty-stretch
+             https://opengameart.org/content/detour

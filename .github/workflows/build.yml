@@ -1,0 +1,110 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.7.2
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}
+
+      - name: Install Godot and export templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          mkdir -p ~/godot
+          curl -fsSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip -d ~/godot
+          mv ~/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 ~/godot/godot
+          curl -fsSL -o templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          target=~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          mkdir -p "$target"
+          unzip -qj templates.tpz \
+            templates/version.txt \
+            'templates/web_nothreads_*' \
+            'templates/windows_*_x86_64.exe' \
+            templates/macos.zip \
+            -d "$target"
+
+      - name: Import assets
+        run: ~/godot/godot --headless --path . --import
+
+      - name: Export
+        run: |
+          mkdir -p build/web build/windows build/macos
+          ~/godot/godot --headless --path . --export-release "Web" build/web/index.html
+          ~/godot/godot --headless --path . --export-release "Windows" build/windows/Glider.exe
+          ~/godot/godot --headless --path . --export-release "macOS" build/macos/Glider.zip
+          test -f build/web/index.pck
+          test -f build/windows/Glider.exe
+          test -f build/macos/Glider.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: build/macos/Glider.zip
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  pages:
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+    needs: export
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: export
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: macos
+      - name: Package Windows
+        run: cd windows && zip -q ../Glider-windows.zip Glider.exe
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cp macos/Glider.zip Glider-macos.zip
+          gh release create "$GITHUB_REF_NAME" Glider-windows.zip Glider-macos.zip --generate-notes
