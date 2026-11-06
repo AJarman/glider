@@ -151,12 +151,11 @@ class RouletteWheel extends Control:
 	# Slice sizes match the real odds, so the wheel never lies.
 	const SLICES := [
 		["NONE", 0.6667, Color(0.93, 0.52, 0.65)],
-		["MINES", 0.0467, Color(0.78, 0.05, 0.13)],
-		["CLOUD", 0.0467, Color(0.55, 0.6, 0.68)],
-		["ALL", 0.1, Color(0.95, 0.72, 0.1)],
-		["STORM", 0.0467, Color(0.15, 0.25, 0.65)],
-		["REVERSE", 0.0466, Color(0.5, 0.2, 0.68)],
-		["TORNADO", 0.0466, Color(0.2, 0.55, 0.4)],
+		["MINES", 0.0667, Color(0.78, 0.05, 0.13)],
+		["CLOUD", 0.0667, Color(0.55, 0.6, 0.68)],
+		["STORM", 0.0667, Color(0.15, 0.25, 0.65)],
+		["REVERSE", 0.0666, Color(0.5, 0.2, 0.68)],
+		["TORNADO", 0.0666, Color(0.2, 0.55, 0.4)],
 	]
 
 	var angle := 0.0:

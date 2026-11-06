@@ -32,7 +32,6 @@ const BLURBS := {
 	Mod.REVERSE: "Everything's backwards",
 	Mod.TORNADO: "Ride it or run",
 }
-const ALL_CHANCE := 0.1
 const ANY_CHANCE := 1.0 / 3.0
 const TWISTER_REACH := 130.0
 const TWISTER_CORE := 11.0
@@ -181,10 +180,7 @@ class ShardCloud:
 
 
 static func roll(rng: RandomNumberGenerator) -> Array:
-	var r := rng.randf()
-	if r < ALL_CHANCE:
-		return Mod.values()
-	if r < ANY_CHANCE:
+	if rng.randf() < ANY_CHANCE:
 		return [rng.randi_range(0, Mod.size() - 1)]
 	return []
 
@@ -820,7 +816,7 @@ func _add_clouds() -> void:
 	var quad := QuadMesh.new()
 	quad.size = Vector2(26, 26)
 	quad.material = mat
-	var p := _weather_particles(70, 7.0)
+	var p := _weather_particles(35, 7.0)
 	p.emission_box_extents = Vector3(70, 30, 70)
 	p.spread = 180.0
 	p.initial_velocity_min = 0.5

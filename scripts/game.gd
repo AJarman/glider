@@ -232,15 +232,13 @@ func _spin_roulette() -> void:
 func _wheel_slice(result: Array) -> int:
 	if result.is_empty():
 		return 0
-	if result.size() > 1:
-		return 3
-	return [1, 2, 4, 5, 6][result[0]]
+	return result[0] + 1
 
 
 func _roulette_title(result: Array) -> String:
 	if result.is_empty():
 		return "NO MODIFIER"
-	return "ALL FIVE!" if result.size() > 1 else ModifiersScript.NAMES[result[0]]
+	return " + ".join(result.map(func(m: int) -> String: return ModifiersScript.NAMES[m]))
 
 
 func _apply_modifiers(result: Array) -> void:
@@ -457,7 +455,7 @@ func _update_atmosphere() -> void:
 		light = 0.7
 	if mods.has(ModifiersScript.Mod.CLOUD):
 		color = Color(0.82, 0.85, 0.89)
-		density = 0.024
+		density = 0.012
 		sky = 1.0
 		light = 0.7
 	if cam.global_position.y < 0.0:

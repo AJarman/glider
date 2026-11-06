@@ -362,7 +362,9 @@ func _air_step(delta: float, inp: Vector2) -> void:
 			lift_dir = lift_dir.normalized()
 		var cl := _cl(aoa) * (1.0 + pull_boost * maxf(inp.y, 0.0))
 		var q := lift_k * sp * sp
-		var lift := clampf(q * cl * (1.0 + ground_effect_lift * ge), -max_g * gravity, max_g * gravity)
+		# A headwind adds to the air over the wings, so it adds lift but not drag.
+		var air_sp := sp + maxf(-vd.dot(wind), 0.0)
+		var lift := clampf(lift_k * air_sp * air_sp * cl * (1.0 + ground_effect_lift * ge), -max_g * gravity, max_g * gravity)
 		v += lift_dir * lift * delta
 		v -= vd * q * (cd0 + cdi * cl * cl) * (1.0 - ground_effect_drag * ge) * delta
 		v += wind * wind_factor * delta
