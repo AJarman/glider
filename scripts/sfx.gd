@@ -37,6 +37,7 @@ func _ready() -> void:
 	_music = AudioStreamPlayer.new()
 	_music.volume_linear = MUSIC_VOLUME
 	_music.finished.connect(_next_track)
+	_music.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_music)
 	_track = randi() % MUSIC.size()
 	_next_track()

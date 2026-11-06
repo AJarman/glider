@@ -105,7 +105,8 @@ func add_ripple(at: Vector3, strength: float) -> void:
 
 func _build_ramp() -> void:
 	# Integrate a curved centreline: steep at the top, flattening out,
-	# then a small upturned lip at the end. Forward is -Z.
+	# then a big upturned lip that throws the flier up rather than along.
+	# Forward is -Z.
 	var pts := PackedVector3Array()
 	var p := Vector3.ZERO
 	pts.append(p)
@@ -113,10 +114,10 @@ func _build_ramp() -> void:
 	for i in n:
 		var t := float(i) / float(n - 1)
 		var ang: float
-		if t < 0.85:
-			ang = lerpf(-40.0, -5.0, smoothstep(0.0, 0.85, t))
+		if t < 0.8:
+			ang = lerpf(-55.0, -5.0, smoothstep(0.0, 0.8, t))
 		else:
-			ang = lerpf(-5.0, 12.0, smoothstep(0.85, 1.0, t))
+			ang = lerpf(-5.0, 35.0, smoothstep(0.8, 1.0, t))
 		var r := deg_to_rad(ang)
 		p += Vector3(0, sin(r), -cos(r)) * 2.0
 		pts.append(p)

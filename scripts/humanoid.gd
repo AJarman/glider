@@ -6,10 +6,12 @@ extends Node3D
 const SUIT_SHADER := preload("res://scripts/flight_suit.gdshader")
 const OUTLINE_SHADER := preload("res://scripts/outline.gdshader")
 const WING := Color(0.93, 0.94, 0.97)
-const WING_TRIM := Color(0.2, 0.25, 0.3)
-const WING_TIP := Color(0.9, 0.15, 0.15)
+const WING_SPAN := 1.4
+const WING_STATIONS := 18
+const WING_RIBS := 6
 
 const WING_FOLD_Z := 1.45
+const WING_FOLD_X := 0.55
 const MODEL_SCALE := 0.88
 ## Joint name -> skeleton bone, parents first.
 const BONES := {
@@ -89,8 +91,13 @@ func _update_run(delta: float) -> void:
 	# The knee folds while that leg swings forward.
 	p["kn_l"] = Vector3(-0.3 - 1.3 * maxf(c, 0.0), 0, 0)
 	p["kn_r"] = Vector3(-0.3 - 1.3 * maxf(-c, 0.0), 0, 0)
-	p["sh_l"] = Vector3(-0.9 * s, 0, -0.15)
-	p["sh_r"] = Vector3(0.9 * s, 0, 0.15)
+	# Arms pump wide of the body so they show from the chase camera, with the
+	# chest twisting against them.
+	p["sh_l"] = Vector3(-1.3 * s, 0, -0.5)
+	p["sh_r"] = Vector3(1.3 * s, 0, 0.5)
+	p["el_l"] = Vector3(1.5 + 0.5 * s, 0, 0)
+	p["el_r"] = Vector3(1.5 - 0.5 * s, 0, 0)
+	p["spine"] = Vector3(-0.3, 0.3 * s, 0)
 	p["height"] = 0.4 + 0.05 * absf(c)
 
 
@@ -124,7 +131,7 @@ func set_wings(open: bool, instant := false) -> void:
 		var w: Node3D = pair[0]
 		var s: float = pair[1]
 		var rot := Vector3(0, -0.25 * s, 0.08 * s) if open else Vector3(0, 0, -WING_FOLD_Z * s)
-		var scl := Vector3.ONE if open else Vector3(0.25, 1, 1)
+		var scl := Vector3.ONE if open else Vector3(WING_FOLD_X, 1, 1)
 		if instant:
 			w.rotation = rot
 			w.scale = scl
@@ -143,7 +150,7 @@ func set_wings(open: bool, instant := false) -> void:
 		else:
 			_wing_tween.tween_property(w, "rotation", Vector3(0, 0, -WING_FOLD_Z * s), 0.15) \
 				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-			_wing_tween.tween_property(w, "scale", Vector3(0.25, 1, 1), 0.15)
+			_wing_tween.tween_property(w, "scale", Vector3(WING_FOLD_X, 1, 1), 0.15)
 
 
 # --- construction -----------------------------------------------------------
@@ -295,11 +302,11 @@ func _wing(parent: Node3D, s: float) -> Node3D:
 	var hinge := Node3D.new()
 	hinge.position = Vector3(0.15 * s, 0.1, 0.1)
 	parent.add_child(hinge)
-	_part(hinge, _box(Vector3(1.1, 0.035, 0.32)), Vector3(0.6 * s, 0, 0.04), WING)
-	_part(hinge, _box(Vector3(0.7, 0.04, 0.08)), Vector3(0.5 * s, 0.002, -0.06), WING_TRIM)
-	_part(hinge, _box(Vector3(0.24, 0.05, 0.36)), Vector3(1.24 * s, 0, 0.08), WING_TIP)
+	var skin := _part(hinge, _wing_mesh(s), Vector3.ZERO, Color.WHITE)
+	skin.material_override.vertex_color_use_as_albedo = true
+	skin.material_override.next_pass = _outline()
 	hinge.rotation = Vector3(0, 0, -WING_FOLD_Z * s)
-	hinge.scale = Vector3(0.25, 1, 1)
+	hinge.scale = Vector3(WING_FOLD_X, 1, 1)
 	return hinge
 
 
@@ -317,6 +324,44 @@ func _build_poses() -> void:
 	poses["swan"] = sym.call(Vector3(-0.2, 0, 1.45), Vector3(0.1, 0, 0), Vector3(0, 0, 0.04), Vector3(-0.15, 0, 0), Vector3(0.25, 0, 0), Vector3(0.7, 0, 0), 0.42)
 	poses["glide"] = sym.call(Vector3(3.0, 0, 0.25), Vector3.ZERO, Vector3(0, 0, 0.05), Vector3(-0.2, 0, 0), Vector3.ZERO, Vector3(0.7, 0, 0), 0.42)
 	poses["tuck"] = sym.call(Vector3(1.3, 0, 0.3), Vector3(1.6, 0, 0), Vector3(1.9, 0, 0.1), Vector3(-2.3, 0, 0), Vector3(-0.7, 0, 0), Vector3(0.2, 0, 0), 0.0)
+
+
+## A swept, tapered wing with an upturned tip, in the flier's colours. Span runs
+## along X, the leading edge points at the head (+Y) and the top faces out of
+## the back (+Z).
+func _wing_mesh(s: float) -> ArrayMesh:
+	var edge: Color = LOOKS[look]["suit"]
+	var tip: Color = LOOKS[look]["trim"]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in WING_STATIONS:
+		var t0 := 0.985 * i / WING_STATIONS
+		var t1 := 0.985 * (i + 1) / WING_STATIONS
+		for k in WING_RIBS * 2:
+			var a := _wing_point(t0, k, s)
+			var b := _wing_point(t1, k, s)
+			var c := _wing_point(t1, k + 1, s)
+			var d := _wing_point(t0, k + 1, s)
+			var chord := 1.0 - absf(float(k) + 0.5 - WING_RIBS) / WING_RIBS
+			var stripe := absf(t0 - 0.66) < 0.02
+			st.set_color(tip if t0 > 0.8 or stripe else edge if chord < 0.2 else WING)
+			var quad := [a, b, c, a, c, d] if s > 0.0 else [a, c, b, a, d, c]
+			for v: Vector3 in quad:
+				st.add_vertex(v)
+	st.generate_normals()
+	return st.commit()
+
+
+## A point on the wing skin: t along the span, k around the aerofoil section,
+## over the top from the leading edge and back underneath.
+func _wing_point(t: float, k: int, s: float) -> Vector3:
+	var u := 1.0 - absf(float(k) - WING_RIBS) / WING_RIBS
+	var side := 1.0 if k < WING_RIBS else -1.0
+	var chord := lerpf(0.62, 0.14, t) * sqrt(1.0 - pow(t, 5.0))
+	var sweep := 0.18 - 0.55 * pow(t, 1.6)
+	var lift := 0.12 * t * t + 0.25 * pow(maxf(t - 0.85, 0.0) / 0.15, 2.0)
+	var thick := 0.2 * chord * sqrt(u) * (1.0 - u)
+	return Vector3(WING_SPAN * t * s, sweep - u * chord, lift + side * thick)
 
 
 func _part(parent: Node3D, mesh: Mesh, pos: Vector3, c: Color) -> MeshInstance3D:

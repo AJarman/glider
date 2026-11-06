@@ -10,6 +10,7 @@ const ModifiersScript := preload("res://scripts/modifiers.gd")
 const SfxScript := preload("res://scripts/sfx.gd")
 const MotionBlurScript := preload("res://scripts/motion_blur.gd")
 const TargetScript := preload("res://scripts/target.gd")
+const MenuScript := preload("res://scripts/menu.gd")
 
 const ROUNDS := 10
 const RIPPLE_GAP := 0.1
@@ -17,7 +18,7 @@ const SPIN_TIME := 2.5
 const SPIN_HOLD := 0.9
 const STEP_GAP := 0.24
 
-enum State { READY, RAMP, FLIGHT, LANDED, RESULT, GAME_OVER, ROULETTE }
+enum State { READY, RAMP, FLIGHT, LANDED, RESULT, GAME_OVER, ROULETTE, TITLE }
 
 var state := State.READY
 var round_num := 1
@@ -35,6 +36,7 @@ var blood: BloodScript
 var mods: ModifiersScript
 var sfx: SfxScript
 var blur: MotionBlurScript
+var menu: MenuScript
 var sun: DirectionalLight3D
 var marker: MeshInstance3D
 var env: Environment
@@ -117,7 +119,15 @@ func _ready() -> void:
 	marker.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(marker)
 
-	_start_round()
+	menu = MenuScript.new()
+	menu.game = self
+	menu.hud = hud
+	add_child(menu)
+
+	if autoplay:
+		_start_round()
+	else:
+		quit_to_title()
 
 
 func _read_forced_mods() -> void:
@@ -129,15 +139,55 @@ func _read_forced_mods() -> void:
 
 
 func _setup_input() -> void:
-	_action("up", [KEY_W, KEY_UP], [], [[JOY_AXIS_LEFT_Y, -1.0]])
-	_action("down", [KEY_S, KEY_DOWN], [], [[JOY_AXIS_LEFT_Y, 1.0]])
-	_action("left", [KEY_A, KEY_LEFT], [], [[JOY_AXIS_LEFT_X, -1.0]])
-	_action("right", [KEY_D, KEY_RIGHT], [], [[JOY_AXIS_LEFT_X, 1.0]])
-	_action("wings", [KEY_SPACE], [JOY_BUTTON_A], [])
+	_action("up", [KEY_W, KEY_UP], [JOY_BUTTON_DPAD_UP], [[JOY_AXIS_LEFT_Y, -1.0]])
+	_action("down", [KEY_S, KEY_DOWN], [JOY_BUTTON_DPAD_DOWN], [[JOY_AXIS_LEFT_Y, 1.0]])
+	_action("left", [KEY_A, KEY_LEFT], [JOY_BUTTON_DPAD_LEFT], [[JOY_AXIS_LEFT_X, -1.0]])
+	_action("right", [KEY_D, KEY_RIGHT], [JOY_BUTTON_DPAD_RIGHT], [[JOY_AXIS_LEFT_X, 1.0]])
+	# Spare buttons overlap, so a generic pad with an odd layout still plays.
+	var wings_buttons := [JOY_BUTTON_A, JOY_BUTTON_B, JOY_BUTTON_LEFT_SHOULDER, JOY_BUTTON_RIGHT_SHOULDER]
+	_action("wings", [KEY_SPACE], wings_buttons, [])
 	_action("restart", [KEY_R], [JOY_BUTTON_BACK], [])
-	_action("next", [KEY_ENTER, KEY_KP_ENTER], [JOY_BUTTON_START], [])
-	_action("quit", [KEY_ESCAPE], [], [])
-	_action("flier", [KEY_C], [JOY_BUTTON_Y], [])
+	_action("next", [KEY_ENTER, KEY_KP_ENTER], wings_buttons, [])
+	_action("flier", [KEY_C], [JOY_BUTTON_Y, JOY_BUTTON_X], [])
+	_action("pause", [KEY_ESCAPE, KEY_P], [JOY_BUTTON_START], [])
+	# Godot's built-in menu actions have no gamepad buttons.
+	for pair in [["ui_accept", JOY_BUTTON_A], ["ui_cancel", JOY_BUTTON_B]]:
+		var e := InputEventJoypadButton.new()
+		e.device = -1
+		e.button_index = pair[1]
+		InputMap.action_add_event(pair[0], e)
+
+
+## From the welcome page.
+func start_game() -> void:
+	hud.visible = true
+	round_num = 1
+	total = 0
+	sfx.play("taiko")
+	_start_round()
+
+
+func quit_to_title() -> void:
+	get_tree().paused = false
+	state = State.TITLE
+	blood.clear()
+	mods.clear()
+	wind = Vector3.ZERO
+	player.wind = wind
+	player.reset(level.start_position)
+	player.input_override = null
+	cam.snap()
+	hud.set_modifiers([])
+	hud.stop_wheel("")
+	hud.hide_wheel()
+	hud.show_banner("", "", Color.WHITE, 0.0)
+	hud.visible = false
+	menu.show_title()
+
+
+## The roulette and the final score have no round to go back to.
+func can_retry() -> bool:
+	return state != State.TITLE and state != State.GAME_OVER and state != State.ROULETTE
 
 
 func _action(n: String, keys: Array, buttons: Array, axes: Array) -> void:
@@ -230,9 +280,10 @@ func _spin_roulette() -> void:
 
 
 func _wheel_slice(result: Array) -> int:
+	# The odd slices are modifiers, with a "none" slice between each.
 	if result.is_empty():
-		return 0
-	return result[0] + 1
+		return rng.randi_range(0, ModifiersScript.Mod.size() - 1) * 2
+	return result[0] * 2 + 1
 
 
 func _roulette_title(result: Array) -> String:
@@ -265,9 +316,7 @@ func _show_round_banner() -> void:
 func _process(delta: float) -> void:
 	state_time += delta
 
-	if Input.is_action_just_pressed("quit"):
-		get_tree().quit()
-	if Input.is_action_just_pressed("restart") and state != State.GAME_OVER and state != State.ROULETTE:
+	if Input.is_action_just_pressed("restart") and can_retry():
 		_start_round(false)
 		return
 
@@ -580,7 +629,7 @@ func _on_settled() -> void:
 	hud.set_status(round_num, ROUNDS, total)
 	if score > 0:
 		var praise := "Nice landing!" if score < 100 else "BULLSEYE!" if score >= 300 else "Great shot!"
-		hud.show_banner("+%d" % score, praise, Color(1, 0.95, 0.4), 0.0, 0.9)
+		hud.show_banner("+%d" % score, praise, TargetScript.SCORE_COLORS[score].lerp(Color.WHITE, 0.2), 0.0, 0.9)
 		sfx.play("perfect" if score >= 100 else "score")
 	else:
 		hud.show_banner("MISS", "Off target", Color(0.8, 0.85, 1.0), 0.0)

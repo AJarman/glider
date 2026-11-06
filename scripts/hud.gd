@@ -27,10 +27,22 @@ class WindArrow extends Control:
 		draw_colored_polygon(PackedVector2Array([tip + d * 4.0, tip - d * 8.0 + perp * 8.0, tip - d * 8.0 - perp * 8.0]), Color.WHITE)
 
 
-const KEYBOARD_HELP := "Ramp: W push · A/D steer      Air: SPACE wings · S pull up (hold to loop) · W push · A/D roll      R retry"
-const GAMEPAD_HELP := "Left stick: up push · left/right steer · down pull up (hold to loop)      A wings      OPTIONS retry"
-const KEYBOARD_NAMES := {"wings": "SPACE", "next": "ENTER", "flier": "C"}
-const GAMEPAD_NAMES := {"wings": "A", "next": "MENU", "flier": "Y"}
+const KEYBOARD_HELP := "Ramp: W push · A/D steer      Air: {wings} wings · S pull up (hold to loop) · W push · A/D roll      {retry} retry      {pause} pause"
+const GAMEPAD_HELP := "Stick or D-pad: up push · left/right steer · down pull up      {wings} wings      {retry} retry      {pause} pause"
+const KEYBOARD_NAMES := {"wings": "SPACE", "next": "ENTER", "flier": "C", "retry": "R", "pause": "ESC"}
+## Godot numbers buttons by position, so only the printed labels differ.
+const PAD_NAMES := {
+	"xbox": {"wings": "A", "next": "A", "flier": "Y", "retry": "VIEW", "pause": "MENU"},
+	"playstation": {"wings": "CROSS", "next": "CROSS", "flier": "TRIANGLE", "retry": "SHARE", "pause": "OPTIONS"},
+	"nintendo": {"wings": "B", "next": "B", "flier": "X", "retry": "MINUS", "pause": "PLUS"},
+	"generic": {"wings": "A", "next": "A", "flier": "Y", "retry": "SELECT", "pause": "START"},
+}
+const PAD_FAMILIES := {
+	"xbox": "xbox", "xinput": "xbox", "microsoft": "xbox",
+	"playstation": "playstation", "dualshock": "playstation", "dualsense": "playstation",
+	"sony": "playstation", "ps3": "playstation", "ps4": "playstation", "ps5": "playstation",
+	"nintendo": "nintendo", "switch": "nintendo", "joy-con": "nintendo", "pro controller": "nintendo",
+}
 
 class VelocityGimbal extends Control:
 	const RADIUS := 62.0
@@ -150,12 +162,16 @@ class RouletteWheel extends Control:
 	const TICK_ARC := TAU / 28.0
 	# Slice sizes match the real odds, so the wheel never lies.
 	const SLICES := [
-		["NONE", 0.6667, Color(0.93, 0.52, 0.65)],
-		["MINES", 0.0667, Color(0.78, 0.05, 0.13)],
-		["CLOUD", 0.0667, Color(0.55, 0.6, 0.68)],
-		["STORM", 0.0667, Color(0.15, 0.25, 0.65)],
-		["REVERSE", 0.0666, Color(0.5, 0.2, 0.68)],
-		["TORNADO", 0.0666, Color(0.2, 0.55, 0.4)],
+		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
+		["MINES", 0.1333, Color(0.78, 0.05, 0.13)],
+		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
+		["CLOUD", 0.1333, Color(0.55, 0.6, 0.68)],
+		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
+		["STORM", 0.1333, Color(0.15, 0.25, 0.65)],
+		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
+		["REVERSE", 0.1333, Color(0.5, 0.2, 0.68)],
+		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
+		["TORNADO", 0.1333, Color(0.2, 0.55, 0.4)],
 	]
 
 	var angle := 0.0:
@@ -202,6 +218,7 @@ class RouletteWheel extends Control:
 
 
 var gamepad := false
+var _pad_device := 0
 var round_label: Label
 var score_label: Label
 var velocity_label: Label
@@ -345,8 +362,11 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		_set_gamepad(false)
 	elif event is InputEventJoypadButton:
+		_pad_device = event.device
 		_set_gamepad(true)
-	elif event is InputEventJoypadMotion and absf(event.axis_value) > 0.5:
+	# Triggers are left out: some pads report them at rest as fully negative.
+	elif event is InputEventJoypadMotion and event.axis <= JOY_AXIS_RIGHT_Y and absf(event.axis_value) > 0.5:
+		_pad_device = event.device
 		_set_gamepad(true)
 
 
@@ -361,9 +381,19 @@ func _set_gamepad(value: bool) -> void:
 	_refresh_prompts()
 
 
+## The labels printed on the connected pad.
+func pad_names() -> Dictionary:
+	var pad := Input.get_joy_name(_pad_device).to_lower()
+	for key: String in PAD_FAMILIES:
+		if key in pad:
+			return PAD_NAMES[PAD_FAMILIES[key]]
+	return PAD_NAMES["generic"]
+
+
 func _refresh_prompts() -> void:
-	help.text = GAMEPAD_HELP if gamepad else KEYBOARD_HELP
-	sub_banner.text = _sub_text.format(GAMEPAD_NAMES if gamepad else KEYBOARD_NAMES)
+	var names := pad_names() if gamepad else KEYBOARD_NAMES
+	help.text = (GAMEPAD_HELP if gamepad else KEYBOARD_HELP).format(names)
+	sub_banner.text = _sub_text.format(names)
 
 
 func _label(parent: Control, size: int, color := Color.WHITE) -> Label:

@@ -32,7 +32,7 @@ const BLURBS := {
 	Mod.REVERSE: "Everything's backwards",
 	Mod.TORNADO: "Ride it or run",
 }
-const ANY_CHANCE := 1.0 / 3.0
+const ANY_CHANCE := 2.0 / 3.0
 const TWISTER_REACH := 130.0
 const TWISTER_CORE := 11.0
 const TWISTER_TOP := 170.0

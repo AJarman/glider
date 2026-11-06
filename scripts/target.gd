@@ -2,13 +2,22 @@ extends StaticBody3D
 ## Floating target platform with concentric scoring rings.
 
 const FRACS := [1.0, 0.76, 0.52, 0.3, 0.11]
-const COLORS := [
-	Color(0.15, 0.4, 0.95),
-	Color(0.2, 0.8, 0.3),
-	Color(1.0, 0.85, 0.1),
-	Color(1.0, 0.5, 0.1),
-	Color(0.95, 0.15, 0.15),
-]
+## Cool to hot, so a points value looks the same on every target.
+const SCORE_COLORS := {
+	10: Color(0.15, 0.3, 0.85),
+	20: Color(0.1, 0.55, 0.95),
+	30: Color(0.1, 0.8, 0.85),
+	50: Color(0.2, 0.8, 0.3),
+	60: Color(0.55, 0.85, 0.2),
+	80: Color(0.8, 0.9, 0.15),
+	100: Color(1.0, 0.85, 0.1),
+	120: Color(1.0, 0.68, 0.1),
+	150: Color(1.0, 0.5, 0.1),
+	200: Color(1.0, 0.32, 0.12),
+	250: Color(0.95, 0.15, 0.15),
+	300: Color(0.9, 0.15, 0.6),
+	500: Color(0.6, 0.2, 0.95),
+}
 const RIM := 0.5
 
 var radius := 15.0
@@ -42,7 +51,7 @@ func _ready() -> void:
 		ring.bottom_radius = ring.top_radius
 		ring.height = 0.04
 		ring.radial_segments = 64
-		_mesh(ring, Vector3(0, 0.01 * (i + 1), 0), _mat(COLORS[i]))
+		_mesh(ring, Vector3(0, 0.01 * (i + 1), 0), _mat(SCORE_COLORS[scores[i]]))
 
 		var inner: float = FRACS[i + 1] if i + 1 < FRACS.size() else 0.0
 		var rmid: float = radius * (FRACS[i] + inner) * 0.5
