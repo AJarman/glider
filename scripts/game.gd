@@ -12,8 +12,8 @@ const MotionBlurScript := preload("res://scripts/motion_blur.gd")
 const TargetScript := preload("res://scripts/target.gd")
 const MenuScript := preload("res://scripts/menu.gd")
 const ScoreCode := preload("res://scripts/score_code.gd")
+const Rumble := preload("res://scripts/rumble.gd")
 
-const ROUNDS := 10
 const RIPPLE_GAP := 0.1
 const SPIN_TIME := 2.5
 ## Later spins in a round are quicker, so five don't drag.
@@ -27,6 +27,8 @@ enum State { READY, RAMP, FLIGHT, LANDED, RESULT, GAME_OVER, ROULETTE, TITLE, FL
 
 var state := State.READY
 var round_num := 1
+## How long this game runs: one of ScoreCode.ROUND_OPTIONS.
+var rounds := 5
 ## Everyone playing, in turn order: {"name", "look", "total"}.
 var players: Array = []
 var turn := 0
@@ -121,6 +123,7 @@ func _ready() -> void:
 	sfx = SfxScript.new()
 	add_child(sfx)
 	hud.wheel.ticked.connect(sfx.play.bind("tick", 0.03))
+	hud.wheel.ticked.connect(Rumble.pulse.bind(0.12, 0.0, 0.03))
 	player.wings_changed.connect(_on_wings_changed)
 
 	marker = MeshInstance3D.new()
@@ -157,6 +160,8 @@ func _read_forced_mods() -> void:
 				_forced_mods.append(ModifiersScript.Mod[mod_name.to_upper()])
 		elif arg.begins_with("--target="):
 			_forced_target = arg.trim_prefix("--target=").to_int()
+		elif arg.begins_with("--rounds="):
+			rounds = arg.trim_prefix("--rounds=").to_int()
 		elif arg.begins_with("--spins="):
 			_forced_spins = clampi(arg.trim_prefix("--spins=").to_int(), 1, ModifiersScript.MAX_SPINS)
 
@@ -183,8 +188,9 @@ func _setup_input() -> void:
 
 ## From the player setup page. roster: [{"name", "look"}]; the flyby shows
 ## off the targets first unless it's skipped.
-func start_game(roster: Array, flyby := true) -> void:
+func start_game(roster: Array, game_rounds: int, flyby := true) -> void:
 	get_tree().paused = false
+	rounds = game_rounds
 	hud.visible = true
 	players = []
 	for p: Dictionary in roster:
@@ -209,7 +215,7 @@ func _multiplayer() -> bool:
 
 func _refresh_status() -> void:
 	var board := players.map(func(p: Dictionary) -> Array: return [p.name, p.total])
-	hud.set_status(_cur().name if _multiplayer() else "", round_num, ROUNDS, _cur().total, board)
+	hud.set_status(_cur().name if _multiplayer() else "", round_num, rounds, _cur().total, board)
 
 
 func _freeze_targets(frozen: bool) -> void:
@@ -507,6 +513,7 @@ func _process(delta: float) -> void:
 			if state_time > 2.2:
 				hud.show_banner("GO!", "", Color(1, 1, 1), 0.6, 0.8)
 				sfx.play("go")
+				Rumble.pulse(0.3, 0.25, 0.15)
 				player.release()
 				state = State.RAMP
 				state_time = 0.0
@@ -519,7 +526,7 @@ func _process(delta: float) -> void:
 				_next_turn()
 		State.GAME_OVER:
 			if autoplay and state_time > 3.0:
-				start_game(players, false)
+				start_game(players, rounds, false)
 
 	if autoplay:
 		_autopilot()
@@ -540,10 +547,10 @@ func _next_turn() -> void:
 	if turn >= players.size():
 		turn = 0
 		round_num += 1
-	if round_num <= ROUNDS:
+	if round_num <= rounds:
 		_start_round()
 		return
-	round_num = ROUNDS
+	round_num = rounds
 	turn = 0
 	state = State.GAME_OVER
 	state_time = 0.0
@@ -555,12 +562,12 @@ func _next_turn() -> void:
 	var now := int(Time.get_unix_time_from_system())
 	var rows := []
 	for p: Dictionary in players:
-		rows.append({"name": p.name, "total": p.total, "code": ScoreCode.encode(p.total, p.name, now)})
+		rows.append({"name": p.name, "total": p.total, "code": ScoreCode.encode(p.total, p.name, rounds, now)})
 	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.total > b.total)
 	if autoplay:
-		for r in rows: print("final %s %d %s" % [r.name, r.total, r.code])
+		for r in rows: print("final %s %d %s %s" % [r.name, r.total, r.code, ScoreCode.decode(r.code, r.name)])
 		return
-	menu.show_results(rows)
+	menu.show_results(rows, rounds)
 
 
 ## Cycles the current player's flier and remembers the pick for their turns.
@@ -588,11 +595,13 @@ func _update_roulette() -> void:
 			sfx.play("modifier")
 			sfx.play("yoo")
 			hud.impact(0.8)
+			Rumble.pulse(0.35, 0.45, 0.25)
 		if doubled:
 			var n := _rolled.count(_spin_result)
 			hud.pop("%s x%d!" % [ModifiersScript.NAMES[_spin_result], n], Color(1, 0.35, 0.3))
 			hud.impact(1.2)
 			cam.shake(0.4)
+			Rumble.pulse(0.6, 0.9, 0.4)
 	elif _spin_stopped and (skip or state_time >= _spin_time() + SPIN_HOLD):
 		_spin_index += 1
 		if _spin_index < _spins:
@@ -610,6 +619,7 @@ func _update_audio(delta: float) -> void:
 	sfx.set_loop("rush", rush * rush * 0.3, delta)
 	sfx.set_loop_pitch("rush", 0.85 + rush * 0.35)
 	sfx.set_loop("storm", 0.32 if mods.has(ModifiersScript.Mod.HURRICANE) else 0.0, delta)
+	_update_hum(rush)
 	if player.mode == PlayerScript.Mode.GROUND:
 		# One slap of the feet per half turn of the run cycle.
 		_stride += player.body.run_rate * delta
@@ -620,6 +630,20 @@ func _update_audio(delta: float) -> void:
 			if _step_wait <= 0.0:
 				_step_wait = STEP_GAP
 				sfx.play("step", 0.1, 0.16)
+
+
+## A low rattle down the ramp, and buffeting in a fast dive or a hurricane.
+func _update_hum(rush: float) -> void:
+	var weak := 0.0
+	var strong := 0.0
+	if state == State.RAMP and player.mode == PlayerScript.Mode.GROUND:
+		weak = clampf(player.velocity.length() / 45.0, 0.0, 1.0) * 0.35
+	elif state == State.FLIGHT:
+		weak = rush * rush * 0.4
+		if mods.has(ModifiersScript.Mod.HURRICANE):
+			strong = 0.15 * player.wind.length() / maxf(wind.length(), 0.01)
+	if weak > 0.02 or strong > 0.02:
+		Rumble.hum(weak, strong)
 
 
 func _update_gusts() -> void:
@@ -723,10 +747,13 @@ func _on_launched() -> void:
 	state_time = 0.0
 	hud.show_banner("FLY!", "{wings} to pop your wings", Color(1, 1, 1), 1.2, 0.9)
 	sfx.play("launch")
+	Rumble.pulse(0.6, 0.7, 0.35)
 	hud.pop("WHOOSH!", Color(0.6, 0.95, 1.0))
 
 
 func _on_touched_down(_col: Object) -> void:
+	var thump := clampf(player.velocity.length() / 30.0, 0.2, 1.0)
+	Rumble.pulse(0.3 * thump, thump, 0.25)
 	if autoplay: print("touchdown v=%s flight=%.1fs" % [player.velocity, state_time])
 	state = State.LANDED
 	state_time = 0.0
@@ -738,11 +765,13 @@ func _on_mine_beeped(closeness: float) -> void:
 
 func _on_mine_detonated() -> void:
 	sfx.play("boom", 0.05, 0.8)
+	Rumble.pulse(1.0, 1.0, 0.6)
 	hud.pop("KA-BOOM!", Color(1, 0.5, 0.2))
 
 
 func _on_shockwave(strength: float) -> void:
 	cam.shake(strength * 3.5)
+	Rumble.pulse(strength, strength, 0.2 + strength * 0.4)
 	hud.impact(strength * 1.6)
 	sfx.play("crash", 0.1, 0.3 + strength * 0.7)
 
@@ -765,6 +794,7 @@ func _bleed(impact: Vector3, severity: float) -> void:
 func _on_shrapnel_hit(impact: Vector3) -> void:
 	_bleed(impact, 0.8)
 	cam.shake(1.3)
+	Rumble.pulse(0.9, 1.0, 0.5)
 	sfx.play("crash")
 	hud.show_banner("HIT!", "Your wings are gone!", Color(1, 0.8, 0.2), 1.1, 1.3)
 
@@ -772,6 +802,7 @@ func _on_shrapnel_hit(impact: Vector3) -> void:
 func _on_shrapnel_bump(impact: Vector3) -> void:
 	_bleed(impact, 0.25)
 	cam.shake(0.4)
+	Rumble.pulse(0.4, 0.6, 0.2)
 	sfx.play("crash", 0.1, 0.4)
 	hud.pop("CLANG!", Color(1, 0.9, 0.5))
 
@@ -781,6 +812,7 @@ func _on_wings_changed(open: bool) -> void:
 		return
 	if open:
 		sfx.play("wings")
+		Rumble.pulse(0.35, 0.0, 0.12)
 		hud.pop("FWOOMP!", Color(1, 0.95, 0.5))
 		hud.impact(0.45)
 	else:
@@ -794,6 +826,7 @@ func _on_crashed(at: Vector3, normal: Vector3, vel: Vector3) -> void:
 	sfx.play("crash", 0.08)
 	hud.impact(0.8 + severity * 0.8)
 	cam.shake(0.25 + severity * 0.5)
+	Rumble.pulse(0.6 + severity * 0.4, 0.6 + severity * 0.4, 0.3 + severity * 0.3)
 	hud.pop("SPLAT!", Color(1, 0.3, 0.3))
 	_bleeding = true
 	_trail_last = at
@@ -820,6 +853,8 @@ func _on_settled() -> void:
 			praise = "%d x%d  ·  %s" % [base, round_mult, praise]
 		hud.show_banner("+%d" % score, praise, TargetScript.SCORE_COLORS[base].lerp(Color.WHITE, 0.2), 0.0, 0.9)
 		sfx.play("perfect" if base >= 100 else "score")
+		var joy := clampf(base / 300.0, 0.2, 1.0)
+		Rumble.pulse(joy, joy * 0.6, 0.2 + joy * 0.5)
 	else:
 		hud.show_banner("MISS", "Off target", Color(0.8, 0.85, 1.0), 0.0)
 		sfx.play("miss")
@@ -833,6 +868,7 @@ func _on_splashed() -> void:
 	cam.orbit = true
 	hud.show_banner("SPLASH!", "Into the drink…", Color(0.7, 0.92, 1.0), 1.5, 0.7)
 	sfx.play("splash", 0.06)
+	Rumble.pulse(0.5, 0.4, 0.4)
 	sfx.play("miss", 0.0, 0.7)
 
 
@@ -840,6 +876,7 @@ func _on_skimmed() -> void:
 	if autoplay: print("skim v=%.1f pos=%s" % [player.velocity.length(), player.global_position])
 	hud.show_banner("SKIM!", "", Color(0.7, 0.95, 1.0), 0.4, 0.5)
 	sfx.play("skim", 0.08)
+	Rumble.pulse(0.3, 0.45, 0.15)
 	hud.pop("BOING!", Color(0.6, 1.0, 0.8))
 	level.add_ripple(player.global_position, 1.0)
 

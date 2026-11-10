@@ -3,7 +3,9 @@ extends Node3D
 
 const TargetScript := preload("res://scripts/target.gd")
 
-const LIP := Vector3(0, 40, 0)
+const LIP := Vector3(0, 55, 0)
+## Length of each slice of the ramp's centreline.
+const SEG := 2.6
 const RAMP_WIDTH := 8.0
 const RAIL_H := 1.2
 const TARGET_TOP := 2.5
@@ -125,7 +127,7 @@ func _build_ramp() -> void:
 		else:
 			ang = lerpf(-5.0, 45.0, smoothstep(0.82, 1.0, t))  # A steep kicker.
 		var r := deg_to_rad(ang)
-		p += Vector3(0, sin(r), -cos(r)) * 2.0
+		p += Vector3(0, sin(r), -cos(r)) * SEG
 		pts.append(p)
 	var off := LIP - pts[pts.size() - 1]
 	for i in pts.size():

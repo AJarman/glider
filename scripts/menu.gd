@@ -3,6 +3,8 @@ extends CanvasLayer
 
 const FONT := preload("res://assets/fonts/DelaGothicOne-Regular.ttf")
 const HumanoidScript := preload("res://scripts/humanoid.gd")
+const ScoreCode := preload("res://scripts/score_code.gd")
+const Rumble := preload("res://scripts/rumble.gd")
 const MAX_PLAYERS := 4
 const NAME_LENGTH := 10
 const CRIMSON := Color(0.78, 0.05, 0.13)
@@ -41,12 +43,18 @@ var _add: Button
 var _go: Button
 ## Who's playing, kept between games: [{"name", "look"}].
 var _roster: Array = [{"name": "PLAYER 1", "look": 0}]
+## Game length, also kept between games.
+var _rounds := 5
+var _rounds_button: Button
+var _vibration_buttons: Array[Button] = []
 var _results: Control
+var _results_sub: Label
 var _results_grid: GridContainer
 var _again: Button
 
 
 func _ready() -> void:
+	Rumble.load_setting()
 	layer = 10
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	var root := Control.new()
@@ -68,6 +76,7 @@ func _ready() -> void:
 	_title_list = _list(_title)
 	_button(_title_list, "START", _on_start)
 	_button(_title_list, "CONTROLS", _open_controls)
+	_vibration_buttons.append(_button(_title_list, "", _toggle_vibration))
 	_quit_button(_title_list)
 
 	_pause = _screen(root)
@@ -77,6 +86,7 @@ func _ready() -> void:
 	_button(_pause_list, "RESUME", resume)
 	_retry = _button(_pause_list, "RETRY ROUND", _on_retry)
 	_button(_pause_list, "CONTROLS", _open_controls)
+	_vibration_buttons.append(_button(_pause_list, "", _toggle_vibration))
 	_button(_pause_list, "QUIT TO TITLE", game.quit_to_title)
 	_quit_button(_pause_list)
 
@@ -95,6 +105,7 @@ func _ready() -> void:
 	_notice.modulate.a = 0.0
 	root.add_child(_notice)
 
+	_update_vibration_text()
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	for device in Input.get_connected_joypads():
 		_on_joy_connection_changed(device, true)
@@ -145,6 +156,7 @@ func resume() -> void:
 
 func _open_pause() -> void:
 	get_tree().paused = true
+	Rumble.stop()
 	_dim.color.a = DIM_PAUSE
 	_retry.visible = game.can_retry()
 	_show(_pause)
@@ -163,11 +175,12 @@ func _on_go() -> void:
 		if _roster[i].name.strip_edges() == "":
 			_roster[i].name = "PLAYER %d" % (i + 1)
 	_show(null)
-	game.start_game(_roster)
+	game.start_game(_roster, _rounds)
 
 
 ## Shows the final standings, best first. rows: [{"name", "total", "code"}].
-func show_results(rows: Array) -> void:
+func show_results(rows: Array, rounds: int) -> void:
+	_results_sub.text = "%d ROUNDS" % rounds
 	for c in _results_grid.get_children():
 		_results_grid.remove_child(c)
 		c.queue_free()
@@ -191,9 +204,42 @@ func _build_setup(root: Control) -> void:
 	_rule(_setup)
 	_rows = _list(_setup)
 	var list := _list(_setup)
+	_rounds_button = _button(list, "", _cycle_rounds.bind(1))
+	_rounds_button.gui_input.connect(_on_rounds_input)
+	_update_rounds_text()
 	_add = _button(list, "ADD PLAYER", _add_player)
 	_go = _button(list, "GO!", _on_go)
 	_button(list, "BACK", show_title)
+
+
+func _update_rounds_text() -> void:
+	_rounds_button.text = "< %d ROUNDS >" % _rounds
+
+
+func _cycle_rounds(step: int) -> void:
+	var options := ScoreCode.ROUND_OPTIONS
+	_rounds = options[posmod(options.find(_rounds) + step, options.size())]
+	_update_rounds_text()
+
+
+func _on_rounds_input(e: InputEvent) -> void:
+	if e.is_action_pressed("ui_left"):
+		_cycle_rounds(-1)
+		_rounds_button.accept_event()
+	elif e.is_action_pressed("ui_right"):
+		_cycle_rounds(1)
+		_rounds_button.accept_event()
+
+
+func _toggle_vibration() -> void:
+	Rumble.set_enabled(not Rumble.enabled)
+	_update_vibration_text()
+	Rumble.pulse(0.4, 0.4, 0.2)
+
+
+func _update_vibration_text() -> void:
+	for b in _vibration_buttons:
+		b.text = "VIBRATION: %s" % ("ON" if Rumble.enabled else "OFF")
 
 
 func _fill_rows() -> void:
@@ -272,6 +318,7 @@ func _remove_player(i: int) -> void:
 func _build_results(root: Control) -> void:
 	_results = _screen(root)
 	_label(_results, "RESULTS", 76, Color.WHITE, 16)
+	_results_sub = _label(_results, "", 24, Color(1, 0.95, 0.4), 8)
 	_rule(_results)
 	_results_grid = GridContainer.new()
 	_results_grid.columns = 4
@@ -287,7 +334,7 @@ func _build_results(root: Control) -> void:
 
 func _play_again() -> void:
 	_show(null)
-	game.start_game(_roster, false)
+	game.start_game(_roster, _rounds, false)
 
 
 func _small_button(parent: Control, text: String, pressed: Callable) -> Button:
@@ -410,7 +457,7 @@ func _list(parent: Control) -> VBoxContainer:
 	return v
 
 
-func _label(parent: Control, text: String, size: int, color: Color, outline: int) -> void:
+func _label(parent: Control, text: String, size: int, color: Color, outline: int) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -419,6 +466,7 @@ func _label(parent: Control, text: String, size: int, color: Color, outline: int
 	l.add_theme_color_override("font_outline_color", CRIMSON)
 	l.add_theme_constant_override("outline_size", outline)
 	parent.add_child(l)
+	return l
 
 
 func _rule(parent: Control) -> void:
