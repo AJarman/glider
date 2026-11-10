@@ -11,18 +11,27 @@ const SfxScript := preload("res://scripts/sfx.gd")
 const MotionBlurScript := preload("res://scripts/motion_blur.gd")
 const TargetScript := preload("res://scripts/target.gd")
 const MenuScript := preload("res://scripts/menu.gd")
+const ScoreCode := preload("res://scripts/score_code.gd")
 
 const ROUNDS := 10
 const RIPPLE_GAP := 0.1
 const SPIN_TIME := 2.5
+## Later spins in a round are quicker, so five don't drag.
+const SPIN_TIME_AGAIN := 1.6
 const SPIN_HOLD := 0.9
 const STEP_GAP := 0.24
+## Seconds the intro flyby spends on each target.
+const FLYBY_EACH := 2.8
 
-enum State { READY, RAMP, FLIGHT, LANDED, RESULT, GAME_OVER, ROULETTE, TITLE }
+enum State { READY, RAMP, FLIGHT, LANDED, RESULT, GAME_OVER, ROULETTE, TITLE, FLYBY, SPIN_PICK }
 
 var state := State.READY
 var round_num := 1
-var total := 0
+## Everyone playing, in turn order: {"name", "look", "total"}.
+var players: Array = []
+var turn := 0
+## This turn's score multiplier: how many spins the player chose to take.
+var round_mult := 1
 var state_time := 0.0
 var autoplay := false
 var wind := Vector3.ZERO
@@ -43,10 +52,20 @@ var env: Environment
 var _auto_dropping := false
 var _auto_target: Node3D
 var _ripple_wait := 0.0
-var _pending_mods: Array = []
+## The spins chosen this turn, the one under way, and what's come up so far.
+var _spins := 1
+var _spin_index := 0
+var _spin_result := -1
+var _rolled: Array = []
 var _spin_stopped := false
-## Set by --mods=mines,cloud,hurricane,reverse to fix every roulette result.
+## Set by --mods=mines,cloud,hurricane,magnet to fix every roulette result.
 var _forced_mods = null
+## Set by --spins=N to fix how many spins the autopilot takes.
+var _forced_spins := 0
+## Set by --target=N to aim the autopilot at one target.
+var _forced_target := -1
+var _flyby: Array = []
+var _flyby_index := -1
 var _stride := 0.0
 var _step_wait := 0.0
 var _bleeding := false
@@ -94,8 +113,6 @@ func _ready() -> void:
 	mods.shrapnel_hit.connect(_on_shrapnel_hit)
 	mods.shrapnel_bump.connect(_on_shrapnel_bump)
 	mods.shockwave.connect(_on_shockwave)
-	mods.flung.connect(_on_flung)
-	mods.sucked_in.connect(_on_sucked_in)
 	add_child(mods)
 
 	blur = MotionBlurScript.new()
@@ -125,6 +142,8 @@ func _ready() -> void:
 	add_child(menu)
 
 	if autoplay:
+		hud.visible = true
+		players = [{"name": "AUTO", "look": 0, "total": 0}]
 		_start_round()
 	else:
 		quit_to_title()
@@ -136,6 +155,10 @@ func _read_forced_mods() -> void:
 			_forced_mods = []
 			for mod_name in arg.trim_prefix("--mods=").split(",", false):
 				_forced_mods.append(ModifiersScript.Mod[mod_name.to_upper()])
+		elif arg.begins_with("--target="):
+			_forced_target = arg.trim_prefix("--target=").to_int()
+		elif arg.begins_with("--spins="):
+			_forced_spins = clampi(arg.trim_prefix("--spins=").to_int(), 1, ModifiersScript.MAX_SPINS)
 
 
 func _setup_input() -> void:
@@ -158,13 +181,78 @@ func _setup_input() -> void:
 		InputMap.action_add_event(pair[0], e)
 
 
-## From the welcome page.
-func start_game() -> void:
+## From the player setup page. roster: [{"name", "look"}]; the flyby shows
+## off the targets first unless it's skipped.
+func start_game(roster: Array, flyby := true) -> void:
+	get_tree().paused = false
 	hud.visible = true
+	players = []
+	for p: Dictionary in roster:
+		players.append({"name": p.name, "look": p.look, "total": 0})
 	round_num = 1
-	total = 0
+	turn = 0
+	blood.clear()
 	sfx.play("taiko")
-	_start_round()
+	if flyby:
+		_start_flyby()
+	else:
+		_start_round()
+
+
+func _cur() -> Dictionary:
+	return players[turn]
+
+
+func _multiplayer() -> bool:
+	return players.size() > 1
+
+
+func _refresh_status() -> void:
+	var board := players.map(func(p: Dictionary) -> Array: return [p.name, p.total])
+	hud.set_status(_cur().name if _multiplayer() else "", round_num, ROUNDS, _cur().total, board)
+
+
+func _freeze_targets(frozen: bool) -> void:
+	for t in level.targets:
+		t.frozen = frozen
+
+
+## Tours the targets nearest first, ending on the far-off jackpot.
+func _start_flyby() -> void:
+	player.reset(level.start_position)
+	cam.snap()
+	_flyby = level.targets.duplicate()
+	_flyby.sort_custom(func(a: Node3D, b: Node3D) -> bool: return a.position.z > b.position.z)
+	_flyby_index = -1
+	state = State.FLYBY
+	state_time = 0.0
+	hud.set_gauges(false)
+	hud.set_modifiers([])
+	hud.set_multiplier(1)
+	_refresh_status()
+
+
+func _update_flyby() -> void:
+	var skip := Input.is_action_just_pressed("next") or Input.is_action_just_pressed("wings")
+	var index := int(state_time / FLYBY_EACH)
+	if skip or index >= _flyby.size():
+		hud.show_banner("", "", Color.WHITE, 0.0)
+		hud.set_gauges(true)
+		_start_round()
+		return
+	var t: Node3D = _flyby[index]
+	if index != _flyby_index:
+		_flyby_index = index
+		if index == 0:
+			cam.start_tour(cam.global_position, t.global_position)
+		hud.show_banner(t.title, "Up to %d points  ·  {next} to skip" % t.top_score(), Color(1, 0.95, 0.4), 0.0)
+		sfx.play("taiko")
+	var local := fmod(state_time, FLYBY_EACH) / FLYBY_EACH
+	var dist := maxf(t.radius * 2.4, 26.0)
+	var a := lerpf(-0.7, 0.7, local)
+	var c: Vector3 = t.global_position
+	# Looking a little over the target keeps it clear of the banner.
+	cam.tour = [c + Vector3(sin(a), 0, cos(a)) * dist + Vector3.UP * (dist * 0.45 + 6.0), c + Vector3.UP * dist * 0.3]
 
 
 func quit_to_title() -> void:
@@ -177,7 +265,10 @@ func quit_to_title() -> void:
 	player.reset(level.start_position)
 	player.input_override = null
 	cam.snap()
+	_freeze_targets(false)
 	hud.set_modifiers([])
+	hud.set_multiplier(1)
+	hud.set_gauges(true)
 	hud.stop_wheel("")
 	hud.hide_wheel()
 	hud.show_banner("", "", Color.WHITE, 0.0)
@@ -187,7 +278,7 @@ func quit_to_title() -> void:
 
 ## The roulette and the final score have no round to go back to.
 func can_retry() -> bool:
-	return state != State.TITLE and state != State.GAME_OVER and state != State.ROULETTE
+	return state != State.TITLE and state != State.GAME_OVER and state != State.ROULETTE and state != State.FLYBY and state != State.SPIN_PICK
 
 
 func _action(n: String, keys: Array, buttons: Array, axes: Array) -> void:
@@ -259,57 +350,136 @@ func _start_round(spin := true) -> void:
 	player.wind = wind
 	player.reset(level.start_position)
 	player.input_override = null
+	player.body.set_look(_cur().look)
 	cam.snap()
-	hud.set_status(round_num, ROUNDS, total)
+	_freeze_targets(false)
+	_refresh_status()
 	if autoplay:
-		_auto_target = level.targets[rng.randi_range(0, 3)]
+		var pick := _forced_target if _forced_target >= 0 else rng.randi_range(0, level.targets.size() - 1)
+		_auto_target = level.targets[pick]
 	if spin:
 		_spin_roulette()
 	else:
 		_apply_modifiers(mods.active)
 
 
+## First the player chooses how many spins to take: each one multiplies the
+## score, and each one can add a hazard, or double one already rolled.
 func _spin_roulette() -> void:
 	mods.clear()
 	hud.set_modifiers([])
-	_pending_mods = ModifiersScript.roll(rng) if _forced_mods == null else _forced_mods
-	_spin_stopped = false
+	hud.set_multiplier(1)
+	_rolled = []
+	state = State.SPIN_PICK
+	state_time = 0.0
+	if autoplay:
+		_spins = _forced_spins if _forced_spins > 0 else rng.randi_range(1, ModifiersScript.MAX_SPINS)
+		_start_spins()
+		return
+	_spins = clampi(_cur().get("spins", 1), 1, ModifiersScript.MAX_SPINS)
+	_show_spin_pick()
+
+
+func _wheel_title() -> String:
+	var title := "ROUND %d" % round_num
+	return "%s  ·  %s" % [_cur().name, title] if _multiplayer() else title
+
+
+func _show_spin_pick() -> void:
+	var risk: String = ["Play it safe", "Feeling lucky?", "Bold", "Reckless", "Live with it!"][_spins - 1]
+	hud.show_wheel(_wheel_title() + "  ·  HOW MANY SPINS?",
+		hud.prompt("< %d SPIN%s · SCORE x%d >\n%s  ·  {next} to spin" % [_spins, "" if _spins == 1 else "S", _spins, risk]))
+
+
+func _update_spin_pick() -> void:
+	if Input.is_action_just_pressed("flier"):
+		_next_look()
+	var step := int(Input.is_action_just_pressed("right") or Input.is_action_just_pressed("up")) \
+		- int(Input.is_action_just_pressed("left") or Input.is_action_just_pressed("down"))
+	if step != 0:
+		var picked := clampi(_spins + step, 1, ModifiersScript.MAX_SPINS)
+		if picked != _spins:
+			_spins = picked
+			sfx.play("tick")
+			_show_spin_pick()
+	if Input.is_action_just_pressed("next") or Input.is_action_just_pressed("wings"):
+		_cur().spins = _spins
+		_start_spins()
+
+
+func _start_spins() -> void:
+	round_mult = _spins
+	hud.set_multiplier(round_mult)
+	_spin_index = 0
 	state = State.ROULETTE
-	hud.spin_wheel("ROUND %d" % round_num, _wheel_slice(_pending_mods), SPIN_TIME)
+	_next_spin()
+
+
+func _next_spin() -> void:
+	if _forced_mods != null:
+		_spin_result = _forced_mods[_spin_index] if _spin_index < _forced_mods.size() else -1
+	else:
+		_spin_result = ModifiersScript.roll(rng)
+	_spin_stopped = false
+	state_time = 0.0
+	var title := _wheel_title()
+	if _spins > 1:
+		title += "  ·  SPIN %d / %d" % [_spin_index + 1, _spins]
+	hud.spin_wheel(title, _wheel_slice(_spin_result), _spin_time())
 	sfx.play("taiko")
 
 
-func _wheel_slice(result: Array) -> int:
+func _spin_time() -> float:
+	return SPIN_TIME if _spin_index == 0 else SPIN_TIME_AGAIN
+
+
+func _wheel_slice(result: int) -> int:
 	# The odd slices are modifiers, with a "none" slice between each.
-	if result.is_empty():
+	if result < 0:
 		return rng.randi_range(0, ModifiersScript.Mod.size() - 1) * 2
-	return result[0] * 2 + 1
+	return result * 2 + 1
+
+
+## "AIR MINES x2 + MAGNET": repeats are stacked, not listed twice.
+func _mod_names(result: Array) -> Array:
+	var names := []
+	for m in ModifiersScript.Mod.values():
+		var n := result.count(m)
+		if n > 0:
+			names.append(ModifiersScript.NAMES[m] + ("" if n == 1 else " x%d" % n))
+	return names
 
 
 func _roulette_title(result: Array) -> String:
 	if result.is_empty():
 		return "NO MODIFIER"
-	return " + ".join(result.map(func(m: int) -> String: return ModifiersScript.NAMES[m]))
+	return " + ".join(_mod_names(result))
 
 
 func _apply_modifiers(result: Array) -> void:
 	mods.apply(result, rng)
-	hud.set_modifiers(result.map(func(m: int) -> String: return ModifiersScript.NAMES[m]))
+	hud.set_modifiers(_mod_names(result))
 	if mods.has(ModifiersScript.Mod.HURRICANE):
 		var ang := rng.randf_range(0.0, TAU)
-		wind = Vector3(cos(ang), 0, sin(ang)) * rng.randf_range(22.0, 30.0)
+		var fury := 1.0 + 0.35 * (mods.count(ModifiersScript.Mod.HURRICANE) - 1)
+		wind = Vector3(cos(ang), 0, sin(ang)) * rng.randf_range(22.0, 30.0) * fury
 		player.wind = wind
 		mods.start_storm(wind)
-	if autoplay: print("modifiers %s" % [_roulette_title(result)])
+	if autoplay: print("modifiers %s x%d" % [_roulette_title(result), round_mult])
 	_show_round_banner()
 
 
 func _show_round_banner() -> void:
 	var active := mods.active
 	if active.is_empty():
-		hud.show_banner("ROUND %d" % round_num, "%s · {flier} to change flier" % player.body.look_name(), Color(1, 0.95, 0.4), 0.0)
+		var title := "ROUND %d" % round_num
+		if _multiplayer():
+			title = "%s'S TURN" % _cur().name
+		hud.show_banner(title, "%s · {flier} to change flier" % player.body.look_name(), Color(1, 0.95, 0.4), 0.0)
 	else:
-		var blurb: String = "Good luck" if active.size() > 1 else ModifiersScript.BLURBS[active[0]]
+		var blurb: String = "Good luck" if _mod_names(active).size() > 1 else ModifiersScript.BLURBS[active[0]]
+		if active.size() > 1 and _mod_names(active).size() == 1:
+			blurb = "Double trouble" if active.size() == 2 else "You asked for this"
 		hud.show_banner(_roulette_title(active), blurb, Color(1, 0.8, 0.3), 0.0, 0.7)
 
 
@@ -321,11 +491,15 @@ func _process(delta: float) -> void:
 		return
 
 	match state:
+		State.FLYBY:
+			_update_flyby()
+		State.SPIN_PICK:
+			_update_spin_pick()
 		State.ROULETTE:
 			_update_roulette()
 		State.READY:
 			if Input.is_action_just_pressed("flier"):
-				player.body.set_look(player.body.look + 1)
+				_next_look()
 				_show_round_banner()
 			if state_time > 1.2 and state_time - delta <= 1.2:
 				hud.show_banner("READY", "", Color(1, 0.95, 0.4), 0.0)
@@ -342,22 +516,10 @@ func _process(delta: float) -> void:
 				return
 		State.RESULT:
 			if state_time > 4.0 or Input.is_action_just_pressed("next") or Input.is_action_just_pressed("wings"):
-				round_num += 1
-				if round_num > ROUNDS:
-					state = State.GAME_OVER
-					state_time = 0.0
-					mods.clear()
-					hud.set_modifiers([])
-					hud.show_banner("FINAL SCORE %d" % total, "Press {next} to play again", Color(1, 0.95, 0.4), 0.0, 1.0)
-					sfx.play("perfect")
-				else:
-					_start_round()
+				_next_turn()
 		State.GAME_OVER:
-			if Input.is_action_just_pressed("next") or (autoplay and state_time > 3.0):
-				round_num = 1
-				total = 0
-				blood.clear()
-				_start_round()
+			if autoplay and state_time > 3.0:
+				start_game(players, false)
 
 	if autoplay:
 		_autopilot()
@@ -372,26 +534,74 @@ func _process(delta: float) -> void:
 	_update_blood_trail()
 
 
+## Round-robin: everyone takes this round in turn, then on to the next.
+func _next_turn() -> void:
+	turn += 1
+	if turn >= players.size():
+		turn = 0
+		round_num += 1
+	if round_num <= ROUNDS:
+		_start_round()
+		return
+	round_num = ROUNDS
+	turn = 0
+	state = State.GAME_OVER
+	state_time = 0.0
+	mods.clear()
+	hud.set_modifiers([])
+	hud.set_multiplier(1)
+	hud.show_banner("", "", Color.WHITE, 0.0)
+	sfx.play("perfect")
+	var now := int(Time.get_unix_time_from_system())
+	var rows := []
+	for p: Dictionary in players:
+		rows.append({"name": p.name, "total": p.total, "code": ScoreCode.encode(p.total, p.name, now)})
+	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.total > b.total)
+	if autoplay:
+		for r in rows: print("final %s %d %s" % [r.name, r.total, r.code])
+		return
+	menu.show_results(rows)
+
+
+## Cycles the current player's flier and remembers the pick for their turns.
+func _next_look() -> void:
+	player.body.set_look(player.body.look + 1)
+	_cur().look = player.body.look
+
+
 func _update_roulette() -> void:
 	if Input.is_action_just_pressed("flier"):
-		player.body.set_look(player.body.look + 1)
+		_next_look()
 	var skip := autoplay or Input.is_action_just_pressed("wings") or Input.is_action_just_pressed("next")
-	if not _spin_stopped and (skip or state_time >= SPIN_TIME):
+	if not _spin_stopped and (skip or state_time >= _spin_time()):
 		_spin_stopped = true
-		state_time = SPIN_TIME
-		hud.stop_wheel(_roulette_title(_pending_mods))
+		state_time = _spin_time()
+		var doubled := _spin_result >= 0 and _spin_result in _rolled
+		if _spin_result >= 0:
+			_rolled.append(_spin_result)
+		var got: String = "NOTHING" if _spin_result < 0 else ModifiersScript.NAMES[_spin_result]
+		hud.stop_wheel(got if _spins == 1 else "%s\n%s" % [got, _roulette_title(_rolled)])
 		sfx.play("taiko")
-		if _pending_mods.is_empty():
+		if _spin_result < 0:
 			sfx.play("kira")
 		else:
 			sfx.play("modifier")
 			sfx.play("yoo")
 			hud.impact(0.8)
-	elif _spin_stopped and (skip or state_time >= SPIN_TIME + SPIN_HOLD):
+		if doubled:
+			var n := _rolled.count(_spin_result)
+			hud.pop("%s x%d!" % [ModifiersScript.NAMES[_spin_result], n], Color(1, 0.35, 0.3))
+			hud.impact(1.2)
+			cam.shake(0.4)
+	elif _spin_stopped and (skip or state_time >= _spin_time() + SPIN_HOLD):
+		_spin_index += 1
+		if _spin_index < _spins:
+			_next_spin()
+			return
 		hud.hide_wheel()
 		state = State.READY
 		state_time = 0.0
-		_apply_modifiers(_pending_mods)
+		_apply_modifiers(_rolled)
 
 
 func _update_audio(delta: float) -> void:
@@ -399,12 +609,7 @@ func _update_audio(delta: float) -> void:
 	var rush := clampf((player.velocity.length() - 15.0) / 50.0, 0.0, 1.0) if airborne else 0.0
 	sfx.set_loop("rush", rush * rush * 0.3, delta)
 	sfx.set_loop_pitch("rush", 0.85 + rush * 0.35)
-	var storm := 0.32 if mods.has(ModifiersScript.Mod.HURRICANE) else 0.0
-	if mods.has(ModifiersScript.Mod.TORNADO):
-		storm = maxf(storm, 0.12 + mods.tornado_closeness * 0.55)
-	sfx.set_loop("storm", storm, delta)
-	if mods.tornado_closeness > 0.35 and airborne:
-		cam.shake((mods.tornado_closeness - 0.35) * 0.5)
+	sfx.set_loop("storm", 0.32 if mods.has(ModifiersScript.Mod.HURRICANE) else 0.0, delta)
 	if player.mode == PlayerScript.Mode.GROUND:
 		# One slap of the feet per half turn of the run cycle.
 		_stride += player.body.run_rate * delta
@@ -497,14 +702,9 @@ func _update_atmosphere() -> void:
 		density = 0.0035
 		sky = 0.7
 		light = 0.55
-	if mods.has(ModifiersScript.Mod.TORNADO):
-		color = Color(0.5, 0.53, 0.56)
-		density = maxf(density, 0.0016)
-		sky = 0.45
-		light = 0.7
 	if mods.has(ModifiersScript.Mod.CLOUD):
 		color = Color(0.82, 0.85, 0.89)
-		density = 0.012
+		density = 0.012 * (1.0 + 0.5 * (mods.count(ModifiersScript.Mod.CLOUD) - 1))
 		sky = 1.0
 		light = 0.7
 	if cam.global_position.y < 0.0:
@@ -539,20 +739,6 @@ func _on_mine_beeped(closeness: float) -> void:
 func _on_mine_detonated() -> void:
 	sfx.play("boom", 0.05, 0.8)
 	hud.pop("KA-BOOM!", Color(1, 0.5, 0.2))
-
-
-func _on_sucked_in() -> void:
-	cam.shake(0.6)
-	sfx.play("launch")
-	hud.show_banner("SUCKED IN!", "Wings out to go higher", Color(1, 0.9, 0.5), 1.0, 0.7)
-
-
-func _on_flung() -> void:
-	cam.shake(1.0)
-	hud.impact(1.1)
-	sfx.play("yoo")
-	sfx.play("launch")
-	hud.show_banner("WHEEEE!", "Spat out of the top!", Color(0.7, 1.0, 0.8), 1.2)
 
 
 func _on_shockwave(strength: float) -> void:
@@ -616,21 +802,24 @@ func _on_crashed(at: Vector3, normal: Vector3, vel: Vector3) -> void:
 func _on_settled() -> void:
 	# Score where the ragdoll's torso came to rest.
 	var p := player.focus()
-	var score := 0
+	var base := 0
 	for t in level.targets:
-		var top: float = t.global_position.y
-		if p.y > top - 0.5 and p.y < top + 2.5:
-			score = maxi(score, t.score_at(p))
-	if autoplay: print("settled score=%d pos=%s" % [score, p])
-	total += score
+		base = maxi(base, t.score_at(p))
+	var score := base * round_mult
+	if autoplay: print("settled score=%d x%d pos=%s" % [base, round_mult, p])
+	_cur().total += score
+	# A body stuck on by the Magnet rides along, so its target can keep moving.
+	_freeze_targets(not player.is_stuck())
 	state = State.RESULT
 	state_time = 0.0
 	cam.orbit = true
-	hud.set_status(round_num, ROUNDS, total)
-	if score > 0:
-		var praise := "Nice landing!" if score < 100 else "BULLSEYE!" if score >= 300 else "Great shot!"
-		hud.show_banner("+%d" % score, praise, TargetScript.SCORE_COLORS[score].lerp(Color.WHITE, 0.2), 0.0, 0.9)
-		sfx.play("perfect" if score >= 100 else "score")
+	_refresh_status()
+	if base > 0:
+		var praise := "Nice landing!" if base < 100 else "JACKPOT!" if base >= 1000 else "BULLSEYE!" if base >= 300 else "Great shot!"
+		if round_mult > 1:
+			praise = "%d x%d  ·  %s" % [base, round_mult, praise]
+		hud.show_banner("+%d" % score, praise, TargetScript.SCORE_COLORS[base].lerp(Color.WHITE, 0.2), 0.0, 0.9)
+		sfx.play("perfect" if base >= 100 else "score")
 	else:
 		hud.show_banner("MISS", "Off target", Color(0.8, 0.85, 1.0), 0.0)
 		sfx.play("miss")

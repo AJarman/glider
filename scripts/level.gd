@@ -9,6 +9,8 @@ const RAIL_H := 1.2
 const TARGET_TOP := 2.5
 const RIPPLES := 24
 const WATER_REACH := 3500.0
+## The tiny far-off jackpot target.
+const PINPRICK_AT := Vector3(30, 0, -760)
 
 var ramp_body: StaticBody3D
 var ramp_pts := PackedVector3Array()
@@ -104,8 +106,8 @@ func add_ripple(at: Vector3, strength: float) -> void:
 
 
 func _build_ramp() -> void:
-	# Integrate a curved centreline: steep at the top, flattening out,
-	# then a big upturned lip that throws the flier up rather than along.
+	# Integrate a curved centreline: a flat start that eases over into a steep
+	# drop, flattening out, then a steep kicker that throws the flier up.
 	# Forward is -Z.
 	var pts := PackedVector3Array()
 	var p := Vector3.ZERO
@@ -114,10 +116,14 @@ func _build_ramp() -> void:
 	for i in n:
 		var t := float(i) / float(n - 1)
 		var ang: float
-		if t < 0.8:
-			ang = lerpf(-55.0, -5.0, smoothstep(0.0, 0.8, t))
+		if t < 0.12:
+			ang = lerpf(0.0, -8.0, smoothstep(0.0, 0.12, t))  # Flat start, easing over.
+		elif t < 0.3:
+			ang = lerpf(-8.0, -55.0, smoothstep(0.12, 0.3, t))
+		elif t < 0.8:
+			ang = lerpf(-55.0, -5.0, smoothstep(0.3, 0.8, t))
 		else:
-			ang = lerpf(-5.0, 35.0, smoothstep(0.8, 1.0, t))
+			ang = lerpf(-5.0, 45.0, smoothstep(0.82, 1.0, t))  # A steep kicker.
 		var r := deg_to_rad(ang)
 		p += Vector3(0, sin(r), -cos(r)) * 2.0
 		pts.append(p)
@@ -382,17 +388,19 @@ func _box_verts(st: SurfaceTool, c: Vector3, size: Vector3, col: Color) -> void:
 
 
 func _build_targets() -> void:
+	var K := TargetScript.Kind
 	var defs := [
-		[Vector3(0, 0, -240), 20.0, [10, 20, 30, 50, 100]],
-		[Vector3(-75, 0, -340), 14.0, [20, 50, 80, 120, 200]],
-		[Vector3(70, 0, -370), 14.0, [20, 50, 80, 120, 200]],
-		[Vector3(0, 0, -490), 10.0, [50, 100, 200, 300, 500]],
-		[Vector3(-140, 0, -210), 9.0, [30, 60, 100, 150, 250]],
-		[Vector3(140, 0, -240), 9.0, [30, 60, 100, 150, 250]],
+		[Vector3(0, 0, -240), K.DISC, 20.0, [10, 20, 30, 50, 100], "THE BIG ONE"],
+		[Vector3(-80, 0, -350), K.MOVER, 13.0, [20, 50, 80, 120, 200], "THE DRIFTER"],
+		[Vector3(75, 0, -370), K.SPLITTER, 14.0, [30, 60, 100, 150, 250], "THE SPLITTER"],
+		[Vector3(0, 0, -500), K.PYRAMID, 14.0, [50, 100, 200, 300, 500], "THE PYRAMID"],
+		[Vector3(-140, 0, -210), K.DISC, 9.0, [30, 60, 100, 150, 250], "LEFT FLANK"],
+		[Vector3(140, 0, -240), K.DISC, 9.0, [30, 60, 100, 150, 250], "RIGHT FLANK"],
+		[PINPRICK_AT, K.PINPRICK, 2.5, [1000], "THE PINPRICK"],
 	]
 	for d in defs:
 		var t := TargetScript.new()
-		t.setup(d[1], d[2])
+		t.setup(d[1], d[2], d[3], d[4])
 		t.position = d[0] + Vector3(0, TARGET_TOP, 0)
 		add_child(t)
 		targets.append(t)

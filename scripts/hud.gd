@@ -160,18 +160,17 @@ class RouletteWheel extends Control:
 
 	const RADIUS := 200.0
 	const TICK_ARC := TAU / 28.0
+	const NONE_COLOR := Color(0.93, 0.52, 0.65)
 	# Slice sizes match the real odds, so the wheel never lies.
 	const SLICES := [
-		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
-		["MINES", 0.1333, Color(0.78, 0.05, 0.13)],
-		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
-		["CLOUD", 0.1333, Color(0.55, 0.6, 0.68)],
-		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
-		["STORM", 0.1333, Color(0.15, 0.25, 0.65)],
-		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
-		["REVERSE", 0.1333, Color(0.5, 0.2, 0.68)],
-		["NONE", 0.0667, Color(0.93, 0.52, 0.65)],
-		["TORNADO", 0.1333, Color(0.2, 0.55, 0.4)],
+		["NONE", 1.0 / 12.0, NONE_COLOR],
+		["MINES", 1.0 / 6.0, Color(0.78, 0.05, 0.13)],
+		["NONE", 1.0 / 12.0, NONE_COLOR],
+		["CLOUD", 1.0 / 6.0, Color(0.55, 0.6, 0.68)],
+		["NONE", 1.0 / 12.0, NONE_COLOR],
+		["STORM", 1.0 / 6.0, Color(0.15, 0.25, 0.65)],
+		["NONE", 1.0 / 12.0, NONE_COLOR],
+		["MAGNET", 1.0 / 6.0, Color(0.95, 0.7, 0.1)],
 	]
 
 	var angle := 0.0:
@@ -243,9 +242,13 @@ var wheel_title: Label
 var wheel_result: Label
 var _wheel_tween: Tween
 var _wheel_stop := 0.0
+var mult_label: Label
+var board_label: Label
 var _banner_tween: Tween
 var _sub_text := ""
 var _banner_box: VBoxContainer
+## Flight readouts, hidden while the camera tours the targets.
+var _gauges: Array[Control] = []
 
 
 func _ready() -> void:
@@ -276,7 +279,9 @@ func _ready() -> void:
 	root.add_child(tl)
 	round_label = _label(tl, 26)
 	score_label = _label(tl, 36, Color(1, 0.9, 0.3))
+	board_label = _label(tl, 18, Color(1, 1, 1, 0.8))
 	var vel := VBoxContainer.new()
+	_gauges.append(vel)
 	vel.custom_minimum_size.x = 170
 	vel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	tl.add_child(vel)
@@ -296,9 +301,11 @@ func _ready() -> void:
 	tr.offset_top = 18
 	root.add_child(tr)
 	alt_label = _label(tr, 30)
+	_gauges.append(alt_label)
 	wings_label = _label(tr, 26)
 	mods_label = _label(tr, 24, Color(1, 0.6, 0.25))
-	for l in [alt_label, wings_label, mods_label]:
+	mult_label = _label(tr, 52, Color(1, 0.4, 0.75))
+	for l in [alt_label, wings_label, mods_label, mult_label]:
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 
 	wind_arrow = WindArrow.new()
@@ -345,8 +352,8 @@ func _ready() -> void:
 	wheel.visible = false
 	root.add_child(wheel)
 	wheel_title = _label(wheel, 34, Color(1, 0.95, 0.4))
-	wheel_title.position = Vector2(0, -44)
-	wheel_title.size.x = 460
+	wheel_title.position = Vector2(-270, -44)
+	wheel_title.size.x = 1000
 	wheel_result = _label(wheel, 34)
 	wheel_result.position = Vector2(0, 450)
 	wheel_result.size.x = 460
@@ -390,6 +397,11 @@ func pad_names() -> Dictionary:
 	return PAD_NAMES["generic"]
 
 
+## Fills in {next}, {wings} and the like for whichever device is in use.
+func prompt(text: String) -> String:
+	return text.format(pad_names() if gamepad else KEYBOARD_NAMES)
+
+
 func _refresh_prompts() -> void:
 	var names := pad_names() if gamepad else KEYBOARD_NAMES
 	help.text = (GAMEPAD_HELP if gamepad else KEYBOARD_HELP).format(names)
@@ -407,9 +419,29 @@ func _label(parent: Control, size: int, color := Color.WHITE) -> Label:
 	return l
 
 
-func set_status(round_num: int, rounds: int, total: int) -> void:
-	round_label.text = "ROUND %d / %d" % [mini(round_num, rounds), rounds]
+## who: the player whose turn it is. board: [name, total] for every player,
+## shown only when there's more than one.
+func set_status(who: String, round_num: int, rounds: int, total: int, board: Array) -> void:
+	var r := "ROUND %d / %d" % [mini(round_num, rounds), rounds]
+	round_label.text = r if who == "" else "%s  ·  %s" % [who, r]
 	score_label.text = "SCORE %d" % total
+	var rows := PackedStringArray()
+	if board.size() > 1:
+		for row: Array in board:
+			rows.append("%s  %d" % row)
+	board_label.text = "\n".join(rows)
+
+
+func set_gauges(on: bool) -> void:
+	for g in _gauges:
+		g.visible = on
+	wind_arrow.visible = on and not wheel.visible
+	wind_label.visible = on and not wheel.visible
+	help.visible = on
+
+
+func set_multiplier(mult: int) -> void:
+	mult_label.text = "x%d" % mult if mult > 1 else ""
 
 
 ## A hit worth drawing attention to: speed lines, plus a white frame if hard enough.
@@ -440,13 +472,19 @@ func pop(text: String, color := Color.WHITE) -> void:
 	t.tween_callback(l.queue_free)
 
 
-func spin_wheel(title: String, slice: int, duration: float) -> void:
+## Shows the wheel at rest, for picking how many spins to take.
+func show_wheel(title: String, prompt: String) -> void:
 	show_banner("", "", Color.WHITE, 0.0)
 	wheel.visible = true
 	wind_arrow.visible = false
 	wind_label.visible = false
 	wheel_title.text = title
-	wheel_result.text = ""
+	wheel_result.text = prompt
+	help.visible = false
+
+
+func spin_wheel(title: String, slice: int, duration: float) -> void:
+	show_wheel(title, "")
 	wheel.angle = fposmod(wheel.angle, TAU)
 	_wheel_stop = wheel.stop_angle(slice)
 	_wheel_tween = create_tween()
@@ -462,6 +500,7 @@ func stop_wheel(result: String) -> void:
 
 func hide_wheel() -> void:
 	wheel.visible = false
+	help.visible = true
 	wind_arrow.visible = true
 	wind_label.visible = true
 

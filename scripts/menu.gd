@@ -2,6 +2,9 @@ extends CanvasLayer
 ## Welcome page, pause menu and controls panel. Runs while the tree is paused.
 
 const FONT := preload("res://assets/fonts/DelaGothicOne-Regular.ttf")
+const HumanoidScript := preload("res://scripts/humanoid.gd")
+const MAX_PLAYERS := 4
+const NAME_LENGTH := 10
 const CRIMSON := Color(0.78, 0.05, 0.13)
 const INK := Color(0.05, 0.06, 0.1)
 const DIM_TITLE := 0.35
@@ -12,7 +15,8 @@ const CONTROLS := [
 	["Steer / roll", "A D or LEFT RIGHT", "Stick or D-pad left, right"],
 	["Pull up (hold to loop)", "S or DOWN", "Stick or D-pad down"],
 	["Wings", "SPACE", "{wings} or shoulder buttons"],
-	["Skip / next", "ENTER or SPACE", "{next}"],
+	["Choose spins (score x1 to x5)", "A D or LEFT RIGHT", "Stick or D-pad left, right"],
+	["Skip / next / spin", "ENTER or SPACE", "{next}"],
 	["Change flier", "C", "{flier}"],
 	["Retry round", "R", "{retry}"],
 	["Pause", "ESC or P", "{pause}"],
@@ -31,6 +35,15 @@ var _grid: GridContainer
 var _back: Button
 var _notice: Label
 var _return_focus: Button
+var _setup: Control
+var _rows: VBoxContainer
+var _add: Button
+var _go: Button
+## Who's playing, kept between games: [{"name", "look"}].
+var _roster: Array = [{"name": "PLAYER 1", "look": 0}]
+var _results: Control
+var _results_grid: GridContainer
+var _again: Button
 
 
 func _ready() -> void:
@@ -67,6 +80,8 @@ func _ready() -> void:
 	_button(_pause_list, "QUIT TO TITLE", game.quit_to_title)
 	_quit_button(_pause_list)
 
+	_build_setup(root)
+	_build_results(root)
 	_build_controls(root)
 
 	_notice = Label.new()
@@ -96,6 +111,15 @@ func _input(event: InputEvent) -> void:
 		if event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel"):
 			_close_controls()
 			get_viewport().set_input_as_handled()
+	elif _setup.visible:
+		if event.is_action_pressed("ui_cancel"):
+			show_title()
+			get_viewport().set_input_as_handled()
+		elif event is InputEventJoypadButton and event.pressed and event.button_index == JOY_BUTTON_START:
+			_on_go()
+			get_viewport().set_input_as_handled()
+	elif _results.visible:
+		pass
 	elif _title.visible:
 		if event is InputEventJoypadButton and event.pressed and event.button_index == JOY_BUTTON_START:
 			_on_start()
@@ -128,8 +152,157 @@ func _open_pause() -> void:
 
 
 func _on_start() -> void:
+	_dim.color.a = DIM_TITLE
+	_fill_rows()
+	_show(_setup)
+	_go.grab_focus()
+
+
+func _on_go() -> void:
+	for i in _roster.size():
+		if _roster[i].name.strip_edges() == "":
+			_roster[i].name = "PLAYER %d" % (i + 1)
 	_show(null)
-	game.start_game()
+	game.start_game(_roster)
+
+
+## Shows the final standings, best first. rows: [{"name", "total", "code"}].
+func show_results(rows: Array) -> void:
+	for c in _results_grid.get_children():
+		_results_grid.remove_child(c)
+		c.queue_free()
+	for h in ["", "PLAYER", "SCORE", "CODE"]:
+		_cell(h, Color(0.7, 0.72, 0.78), _results_grid)
+	for i in rows.size():
+		var r: Dictionary = rows[i]
+		var col := Color(1, 0.95, 0.4) if i == 0 else Color.WHITE
+		_cell("#%d" % (i + 1), col, _results_grid, 26)
+		_cell(r.name, col, _results_grid, 26)
+		_cell(str(r.total), col, _results_grid, 26)
+		_cell(r.code, Color(0.6, 0.95, 1.0), _results_grid, 26)
+	_dim.color.a = DIM_PAUSE
+	_show(_results)
+	_again.grab_focus()
+
+
+func _build_setup(root: Control) -> void:
+	_setup = _screen(root)
+	_label(_setup, "WHO'S FLYING?", 60, Color.WHITE, 14)
+	_rule(_setup)
+	_rows = _list(_setup)
+	var list := _list(_setup)
+	_add = _button(list, "ADD PLAYER", _add_player)
+	_go = _button(list, "GO!", _on_go)
+	_button(list, "BACK", show_title)
+
+
+func _fill_rows() -> void:
+	for c in _rows.get_children():
+		_rows.remove_child(c)
+		c.queue_free()
+	for i in _roster.size():
+		var p: Dictionary = _roster[i]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		_rows.add_child(row)
+		var edit := LineEdit.new()
+		edit.text = p.name
+		edit.max_length = NAME_LENGTH
+		edit.custom_minimum_size = Vector2(260, 50)
+		edit.add_theme_font_size_override("font_size", 24)
+		edit.add_theme_stylebox_override("normal", _button_box(Color(INK, 0.8)))
+		edit.add_theme_stylebox_override("focus", _button_box(CRIMSON))
+		edit.select_all_on_focus = true
+		edit.text_changed.connect(_on_name_changed.bind(edit, p))
+		row.add_child(edit)
+		var look := _small_button(row, "", Callable())
+		look.custom_minimum_size.x = 170
+		look.text = _look_text(p.look)
+		look.pressed.connect(_cycle_look.bind(p, look, 1))
+		look.gui_input.connect(_on_look_input.bind(p, look))
+		look.focus_entered.connect(func() -> void: game.player.body.set_look(p.look))
+		if _roster.size() > 1:
+			_small_button(row, "X", _remove_player.bind(i)).custom_minimum_size.x = 54
+	_add.visible = _roster.size() < MAX_PLAYERS
+
+
+func _on_name_changed(text: String, edit: LineEdit, p: Dictionary) -> void:
+	var caret := edit.caret_column
+	edit.text = text.to_upper()
+	edit.caret_column = caret
+	p.name = edit.text
+
+
+## Left and right flick through the fliers without leaving the button.
+func _on_look_input(e: InputEvent, p: Dictionary, button: Button) -> void:
+	if e.is_action_pressed("ui_left"):
+		_cycle_look(p, button, -1)
+		button.accept_event()
+	elif e.is_action_pressed("ui_right"):
+		_cycle_look(p, button, 1)
+		button.accept_event()
+
+
+func _look_text(look: int) -> String:
+	return "< %s >" % String(HumanoidScript.LOOKS[look].name).to_upper()
+
+
+func _cycle_look(p: Dictionary, button: Button, step: int) -> void:
+	p.look = posmod(p.look + step, HumanoidScript.LOOKS.size())
+	button.text = _look_text(p.look)
+	game.player.body.set_look(p.look)
+
+
+func _add_player() -> void:
+	var n := _roster.size()
+	_roster.append({"name": "PLAYER %d" % (n + 1), "look": n % HumanoidScript.LOOKS.size()})
+	_fill_rows()
+	if _add.visible:
+		_add.grab_focus()
+	else:
+		_go.grab_focus()
+
+
+func _remove_player(i: int) -> void:
+	_roster.remove_at(i)
+	_fill_rows()
+	_go.grab_focus()
+
+
+func _build_results(root: Control) -> void:
+	_results = _screen(root)
+	_label(_results, "RESULTS", 76, Color.WHITE, 16)
+	_rule(_results)
+	_results_grid = GridContainer.new()
+	_results_grid.columns = 4
+	_results_grid.add_theme_constant_override("h_separation", 36)
+	_results_grid.add_theme_constant_override("v_separation", 8)
+	_results.add_child(_results_grid)
+	_label(_results, "Keep your code: it proves your score", 18, Color(0.85, 0.87, 0.92), 6)
+	var list := _list(_results)
+	_again = _button(list, "PLAY AGAIN", _play_again)
+	_button(list, "CHANGE PLAYERS", _on_start)
+	_button(list, "QUIT TO TITLE", game.quit_to_title)
+
+
+func _play_again() -> void:
+	_show(null)
+	game.start_game(_roster, false)
+
+
+func _small_button(parent: Control, text: String, pressed: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(0, 50)
+	b.add_theme_font_size_override("font_size", 22)
+	b.add_theme_stylebox_override("normal", _button_box(Color(INK, 0.8)))
+	b.add_theme_stylebox_override("hover", _button_box(Color(CRIMSON, 0.7)))
+	b.add_theme_stylebox_override("pressed", _button_box(CRIMSON))
+	b.add_theme_stylebox_override("focus", _button_box(CRIMSON))
+	if pressed.is_valid():
+		b.pressed.connect(pressed)
+	parent.add_child(b)
+	return b
 
 
 func _on_retry() -> void:
@@ -156,6 +329,8 @@ func _close_controls() -> void:
 func _show(screen: Control) -> void:
 	_title.visible = screen == _title
 	_pause.visible = screen == _pause
+	_setup.visible = screen == _setup
+	_results.visible = screen == _results
 	_controls.visible = false
 	_dim.visible = screen != null
 
@@ -185,12 +360,12 @@ func _fill_controls() -> void:
 		_cell(row[2].format(names), Color.WHITE if pad_on else Color(0.7, 0.72, 0.78))
 
 
-func _cell(text: String, color: Color) -> void:
+func _cell(text: String, color: Color, grid: GridContainer = null, size := 20) -> void:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_size_override("font_size", 20)
+	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
-	_grid.add_child(l)
+	(grid if grid else _grid).add_child(l)
 
 
 func _build_controls(root: Control) -> void:
