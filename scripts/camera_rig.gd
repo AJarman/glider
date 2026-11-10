@@ -6,6 +6,9 @@ const PlayerScript := preload("res://scripts/player.gd")
 
 var player: PlayerScript
 var orbit := false
+## Set by the intro flyby to [where to be, what to look at]; null follows the player.
+var tour = null
+var _tour_look := Vector3.ZERO
 var dir := Vector3.FORWARD
 var cam_up := Vector3.UP
 var _dist := 7.0
@@ -17,11 +20,18 @@ var _shake := 0.0
 var _wobble := 0.0
 
 
+## Starts a tour from wherever the camera is now.
+func start_tour(at: Vector3, look: Vector3) -> void:
+	tour = [at, look]
+	_tour_look = global_position + -global_basis.z * 20.0
+
+
 func shake(amount: float) -> void:
 	_shake = maxf(_shake, amount)
 
 
 func snap() -> void:
+	tour = null
 	dir = Vector3.FORWARD
 	cam_up = Vector3.UP
 	orbit = false
@@ -37,6 +47,14 @@ func snap() -> void:
 func _process(delta: float) -> void:
 	if player == null:
 		return
+	if tour != null:
+		global_position = global_position.lerp(tour[0], 1.0 - exp(-3.0 * delta))
+		_tour_look = _tour_look.lerp(tour[1], 1.0 - exp(-4.5 * delta))
+		h_offset = 0.0
+		v_offset = 0.0
+		if global_position.distance_to(_tour_look) > 0.5:
+			look_at(_tour_look, Vector3.UP)
+		return
 	_target = player.focus()
 	var v := player.focus_velocity()
 	var hv := Vector3(v.x, 0, v.z)
@@ -45,8 +63,6 @@ func _process(delta: float) -> void:
 
 	if orbit:
 		dir = Vector3(dir.x, 0, dir.z).normalized().rotated(Vector3.UP, 0.35 * delta)
-	elif player.riding_twister:
-		pass  # Hold steady, or the flier's whirling would spin the whole view.
 	elif gliding and v.length() > 2.0:
 		dir = _turn(dir, v.normalized(), 3.0 * delta)
 		up_goal = player.att.y
@@ -61,9 +77,7 @@ func _process(delta: float) -> void:
 	var ahead := 4.0
 	match player.mode:
 		PlayerScript.Mode.AIR:
-			if player.riding_twister:
-				dist = 16.0; h = 3.0; ahead = 0.0
-			elif gliding:
+			if gliding:
 				dist = 9.0; h = 2.6; ahead = 12.0
 			else:
 				dist = 7.0; h = 7.0; ahead = 2.0

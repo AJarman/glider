@@ -85,13 +85,10 @@ var bank := 0.0
 var air_time := 0.0
 ## Current strength of the lift cushion over the water, 0 to 1.
 var ground_effect := 0.0
-var reverse_controls := false
+## Magnet modifier: the first touch on a target is where you stay.
+var sticky := false
 ## A mine has blown the wings off; they're back next attempt.
 var wings_lost := false
-## Acceleration from a tornado, set each frame while it has hold of the flier.
-var tornado_pull := Vector3.ZERO
-## Being carried up the inside of a tornado.
-var riding_twister := false
 var ragdoll: Node3D
 
 var body: Node3D
@@ -99,6 +96,7 @@ var visual_root: Node3D
 var _shape: CollisionShape3D
 var _off_floor := 0.0
 var _settle_time := 0.0
+var _stuck := false
 var _rest_time := 0.0
 var _last_fwd := Vector3.FORWARD
 var _prone := 0.0
@@ -156,10 +154,9 @@ func reset(pos: Vector3) -> void:
 	bank = 0.0
 	air_time = 0.0
 	wings_lost = false
-	tornado_pull = Vector3.ZERO
-	riding_twister = false
 	_off_floor = 0.0
 	_settle_time = 0.0
+	_stuck = false
 	_last_fwd = Vector3.FORWARD
 	_prone = 0.0
 	_on_floor = false
@@ -262,7 +259,7 @@ func _get_input() -> Vector2:
 	if mode == Mode.FROZEN:
 		return Vector2.ZERO
 	var stick := Input.get_vector("left", "right", "up", "down")
-	return -stick if reverse_controls else stick
+	return stick
 
 
 func _physics_process(delta: float) -> void:
@@ -277,8 +274,6 @@ func _physics_process(delta: float) -> void:
 			return
 	if mode == Mode.AIR and input_override == null and Input.is_action_just_pressed("wings"):
 		set_wings(not wings_open)
-	if riding_twister:
-		return  # The funnel carries the flier; see Modifiers._ride().
 
 	var inp := _get_input()
 	var pre_vel := velocity
@@ -325,7 +320,7 @@ func _cl(a: float) -> float:
 func _air_step(delta: float, inp: Vector2) -> void:
 	var v := velocity
 	var sp := v.length()
-	v += (Vector3.DOWN * gravity + tornado_pull) * delta
+	v += Vector3.DOWN * gravity * delta
 
 	if sp > 0.5:
 		# Angle of attack and sideslip from the airflow in the body frame.
@@ -395,7 +390,7 @@ func _ground_effect(sp: float) -> float:
 func _post_move(delta: float, pre_vel: Vector3) -> void:
 	match mode:
 		Mode.GROUND:
-			if _on_floor:
+			if _on_floor or (not has_launched and _snap_down()):
 				_off_floor = 0.0
 			else:
 				_off_floor += delta
@@ -414,6 +409,23 @@ func _post_move(delta: float, pre_vel: Vector3) -> void:
 			elif _on_floor:
 				mode = Mode.GROUND
 				_off_floor = 0.0
+
+
+## Keeps the runner on the deck over the ramp's crest, where the straight
+## segments would otherwise toss them off each joint. Past the lip there's
+## nothing below to find, so the real launch is untouched.
+func _snap_down() -> bool:
+	var c := move_and_collide(-_floor_normal * 0.4, true)
+	if c == null or c.get_collider() != ramp_body or c.get_normal().y <= 0.42:
+		return false
+	global_position += c.get_travel()
+	var n := c.get_normal()
+	var sp := velocity.length()
+	velocity -= n * maxf(velocity.dot(n), 0.0)
+	velocity = velocity.normalized() * sp
+	_on_floor = true
+	_floor_normal = n
+	return true
 
 
 func _move(delta: float) -> void:
@@ -452,9 +464,12 @@ func _start_ragdoll(vel: Vector3, col: Object) -> void:
 	_settle_time = 0.0
 	_rest_time = 0.0
 	_shape.set_deferred("disabled", true)
+	_stuck = sticky and col is Node and (col as Node).is_in_group("target")
 	ragdoll = RagdollScript.new()
 	get_parent().add_child(ragdoll)
-	ragdoll.build(body, vel, grippy)
+	ragdoll.build(body, vel, grippy, _stuck)
+	if _stuck:
+		ragdoll.stick_to(col)
 	wings_open = false
 	body.set_wings(false, true)
 	touched_down.emit(col)
@@ -467,14 +482,34 @@ func _ragdoll_step(delta: float) -> void:
 	if p.y < 0.4:
 		_splash(p)
 		return
-	var still: bool = ragdoll.torso().linear_velocity.length() < 0.35 and ragdoll.max_speed() < 1.0
+	# On a moving target, lying still means moving with it.
+	var carrier := _deck_velocity(p)
+	# A swaying deck keeps a loose body shuffling, so allow it more slack.
+	var slack := 1.0 if carrier == Vector3.ZERO else 3.0
+	var still: bool = (ragdoll.torso().linear_velocity - carrier).length() < 0.35 * slack and ragdoll.max_speed(carrier) < slack
 	_settle_time = _settle_time + delta if still else 0.0
 	_rest_time += delta
-	if _settle_time > 0.8 or _rest_time > 12.0:
+	var give_up := 12.0 if carrier == Vector3.ZERO else 5.0
+	if _settle_time > 0.8 or _rest_time > give_up or (_stuck and _rest_time > 0.6):
 		# Pinned here, so where the body lies is exactly what gets scored.
 		mode = Mode.FROZEN
 		ragdoll.pin()
 		settled.emit()
+
+
+## Landed with the Magnet: the body rides its target rather than resting on it.
+func is_stuck() -> bool:
+	return _stuck
+
+
+## How fast the deck under a point is moving: targets record it as meta "vel".
+func _deck_velocity(at: Vector3) -> Vector3:
+	var q := PhysicsRayQueryParameters3D.create(at, at + Vector3.DOWN * 2.5)
+	q.collision_mask = 1
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit and hit.collider is Node:
+		return (hit.collider as Node).get_meta("vel", Vector3.ZERO)
+	return Vector3.ZERO
 
 
 func _clear_ragdoll() -> void:

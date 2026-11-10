@@ -31,13 +31,43 @@ const LINKS := {
 }
 
 var bodies := {}
+## What a Magnet landing stuck the body to; it rides along as that moves.
+var _anchor: Node3D
+var _anchor_last := Transform3D.IDENTITY
+
+
+func _ready() -> void:
+	# After the targets have moved this step, so the body never lags behind.
+	process_physics_priority = 10
+
+
+func _physics_process(_delta: float) -> void:
+	if _anchor == null or not is_instance_valid(_anchor):
+		return
+	var xf := _anchor.global_transform
+	var moved := xf * _anchor_last.affine_inverse()
+	_anchor_last = xf
+	if moved.is_equal_approx(Transform3D.IDENTITY):
+		return
+	for n in bodies:
+		var rb: RigidBody3D = bodies[n]
+		rb.global_transform = moved * rb.global_transform
+
+
+## Carries the whole body along with a (possibly moving) target.
+func stick_to(anchor: Node3D) -> void:
+	_anchor = anchor
+	_anchor_last = anchor.global_transform
 
 
 ## grippy: wings were open on impact, so the body flops and drags to a stop.
-func build(h: Node3D, vel: Vector3, grippy: bool) -> void:
+## stuck: the Magnet holds the body where it touched, so it just slumps.
+func build(h: Node3D, vel: Vector3, grippy: bool, stuck := false) -> void:
 	var pm := PhysicsMaterial.new()
-	pm.friction = 1.0 if grippy else 0.55
-	pm.bounce = 0.05 if grippy else 0.3
+	pm.friction = 1.0 if grippy or stuck else 0.55
+	pm.bounce = 0.0 if stuck else 0.05 if grippy else 0.3
+	if stuck:
+		vel = Vector3.ZERO
 
 	var spin := vel.cross(Vector3.UP).normalized() * -minf(vel.length() * 0.3, 8.0)
 	for n in PARTS:
@@ -49,8 +79,8 @@ func build(h: Node3D, vel: Vector3, grippy: bool) -> void:
 		rb.mass = spec[3]
 		rb.physics_material_override = pm
 		rb.continuous_cd = true
-		rb.linear_damp = 0.35 if grippy else 0.05
-		rb.angular_damp = 1.5 if grippy else 0.6
+		rb.linear_damp = 8.0 if stuck else 0.35 if grippy else 0.05
+		rb.angular_damp = 8.0 if stuck else 1.5 if grippy else 0.6
 		add_child(rb)
 		rb.global_transform = j.global_transform.orthonormalized()
 
@@ -94,7 +124,9 @@ func build(h: Node3D, vel: Vector3, grippy: bool) -> void:
 ## Stops the body dead where it lies.
 func pin() -> void:
 	for n in bodies:
-		(bodies[n] as RigidBody3D).freeze = true
+		var rb: RigidBody3D = bodies[n]
+		rb.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+		rb.freeze = true
 
 
 func torso() -> RigidBody3D:
@@ -106,8 +138,9 @@ func focus() -> Vector3:
 	return t.global_transform * Vector3(0, 0.3, 0)
 
 
-func max_speed() -> float:
+## Fastest any part moves, relative to whatever it rides on.
+func max_speed(carrier := Vector3.ZERO) -> float:
 	var m := 0.0
 	for n in bodies:
-		m = maxf(m, (bodies[n] as RigidBody3D).linear_velocity.length())
+		m = maxf(m, ((bodies[n] as RigidBody3D).linear_velocity - carrier).length())
 	return m

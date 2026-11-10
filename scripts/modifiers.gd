@@ -7,65 +7,29 @@ signal detonated
 signal shrapnel_hit(impact: Vector3)
 ## A slow fragment knocked the flier without doing real damage.
 signal shrapnel_bump(impact: Vector3)
-## The tornado's core took hold of the flier.
-signal sucked_in
-## The tornado spat the flier out of its top.
-signal flung
 ## The pressure wave reached the flier; strength runs from 0 to 1.
 signal shockwave(strength: float)
 ## A proximity beep; closeness runs from 0 at the edge of range to 1 at the mine.
 signal beeped(closeness: float)
 
-enum Mod { MINES, CLOUD, HURRICANE, REVERSE, TORNADO }
+enum Mod { MINES, CLOUD, HURRICANE, MAGNET }
 
 const NAMES := {
 	Mod.MINES: "AIR MINES",
 	Mod.CLOUD: "THICK CLOUD",
 	Mod.HURRICANE: "HURRICANE",
-	Mod.REVERSE: "REVERSE CONTROLS",
-	Mod.TORNADO: "TORNADO",
+	Mod.MAGNET: "MAGNET",
 }
 const BLURBS := {
 	Mod.MINES: "Open wings are a target",
 	Mod.CLOUD: "Trust your instruments",
 	Mod.HURRICANE: "Hold on to something",
-	Mod.REVERSE: "Everything's backwards",
-	Mod.TORNADO: "Ride it or run",
+	Mod.MAGNET: "Touch a target and you stick",
 }
 const ANY_CHANCE := 2.0 / 3.0
-const TWISTER_REACH := 130.0
-const TWISTER_CORE := 11.0
-const TWISTER_TOP := 170.0
-## The spiralling airflow, in m/s, and how hard it grips (per second, at the core).
-const TWISTER_SWIRL := 38.0
-const TWISTER_INFLOW := 34.0
-const TWISTER_LIFT := 14.0
-const TWISTER_DRAG := 5.0
-const TWISTER_HOME := Vector3(0, 0, -280)
-## Debris per kind: planks, crates, logs and scrap.
-const DEBRIS_EACH := 26
-const DEBRIS_COLORS := [
-	Color(0.5, 0.33, 0.18), Color(0.34, 0.24, 0.15), Color(0.6, 0.55, 0.45),
-	Color(0.3, 0.32, 0.36), Color(0.7, 0.2, 0.15),
-]
-## Crates and logs (kinds 1 and 2) hit like big shards; planks and scrap only bump.
-const DEBRIS_HEAVY := [false, true, true, false]
-const DEBRIS_HIT_SCALE := 1.1
-const DEBRIS_RESPAWN := 5.0
-## Wandering: it's shoved at random, carries its momentum and turns back near the edge.
-const TWISTER_ROAM := 140.0
-const TWISTER_MAX_SPEED := 18.0
-const TWISTER_MOMENTUM_LOSS := 0.12
-## Open wings are a sail: the funnel grabs them harder, hauls them up faster and
-## hurls them much further. Tucked in, it's a slower ride and a straighter exit.
-const OPEN_GRIP := 1.5
-const CLIMB_OPEN := 62.0
-const CLIMB_CLOSED := 36.0
-const EJECT_UP_OPEN := 170.0
-const EJECT_UP_CLOSED := 70.0
-const EJECT_OUT_OPEN := 48.0
-const EJECT_OUT_CLOSED := 16.0
-const RIDE_SPEED := 40.0
+## Players pick how many spins to take, from 1 to this; each one multiplies
+## the round's score and stacks another roll of the wheel.
+const MAX_SPINS := 5
 const MINE_COUNT := 14
 const MINE_SCALE := 3.0
 ## Each mine has its own fuse, somewhere in this range.
@@ -109,19 +73,6 @@ var _beep_wait := 0.0
 var _flash := 0.0
 var _weather: Array[CPUParticles3D] = []
 var _time := 0.0
-var _twister: Node3D
-var _debris: Array[MultiMesh] = []
-var _debris_back := PackedFloat32Array()  # When each struck piece returns.
-var _twister_pos := Vector3.ZERO
-var _twister_vel := Vector3.ZERO
-var _twister_shove := Vector3.ZERO
-var _shove_wait := 0.0
-var _twister_spray: CPUParticles3D
-var _fling_wait := 0.0
-var _ride_angle := 0.0
-var _ripple_wait := 0.0
-## How close the flier is to the funnel, from 0 to 1.
-var tornado_closeness := 0.0
 var _clouds: Array[ShardCloud] = []
 
 
@@ -179,10 +130,16 @@ class ShardCloud:
 			m.queue_free()
 
 
-static func roll(rng: RandomNumberGenerator) -> Array:
+## One spin: a modifier, or -1 for none.
+static func roll(rng: RandomNumberGenerator) -> int:
 	if rng.randf() < ANY_CHANCE:
-		return [rng.randi_range(0, Mod.size() - 1)]
-	return []
+		return rng.randi_range(0, Mod.size() - 1)
+	return -1
+
+
+## How many times a modifier came up: doubles hit harder.
+func count(m: int) -> int:
+	return active.count(m)
 
 
 func has(m: int) -> bool:
@@ -192,19 +149,16 @@ func has(m: int) -> bool:
 func apply(mods: Array, rng: RandomNumberGenerator) -> void:
 	clear()
 	active = mods
-	player.reverse_controls = has(Mod.REVERSE)
+	player.sticky = has(Mod.MAGNET)
 	level.set_storm(1.0 if has(Mod.HURRICANE) else 0.0)
 	if has(Mod.MINES):
 		_spawn_mines(rng)
 	if has(Mod.CLOUD):
 		_add_clouds()
-	if has(Mod.TORNADO):
-		_add_twister()
 
 
 func clear() -> void:
 	active = []
-	player.reverse_controls = false
 	level.set_storm(0.0)
 	for m in _mines:
 		m.queue_free()
@@ -223,11 +177,7 @@ func clear() -> void:
 	for w in _weather:
 		w.queue_free()
 	_weather.clear()
-	if _twister:
-		_twister.queue_free()
-		_twister = null
-	tornado_closeness = 0.0
-	player.riding_twister = false
+	player.sticky = false
 
 
 ## Hurricane wind for the round, and the rain blown along it.
@@ -241,8 +191,6 @@ func update(delta: float, cam_pos: Vector3) -> void:
 		w.global_position = cam_pos
 	_update_clouds(delta)
 	_update_shocks(delta)
-	if _twister:
-		_update_twister(delta)
 	if _mines.is_empty():
 		return
 	var armed: bool = player.mode == player.Mode.AIR and player.has_launched
@@ -316,7 +264,7 @@ func _spawn_mines(rng: RandomNumberGenerator) -> void:
 	lamp.height = 0.7
 	lamp.radial_segments = 10
 	lamp.rings = 5
-	for i in MINE_COUNT:
+	for i in MINE_COUNT * count(Mod.MINES):
 		var m := Node3D.new()
 		add_child(m)
 		m.global_position = Vector3(rng.randf_range(-60, 60), rng.randf_range(14, 55), rng.randf_range(-420, -60))
@@ -345,219 +293,6 @@ func _mesh(parent: Node3D, mesh: Mesh, mat: Material, xf: Transform3D) -> void:
 	mi.material_override = mat
 	mi.transform = xf
 	parent.add_child(mi)
-
-
-func _add_twister() -> void:
-	_twister = Node3D.new()
-	add_child(_twister)
-	_twister_pos = TWISTER_HOME + Vector3(randf_range(-80, 80), 0, randf_range(-120, 120))
-	var heading := randf() * TAU
-	_twister_vel = Vector3(cos(heading), 0, sin(heading)) * 7.0
-	_shove_wait = 0.0
-	_twister.global_position = _twister_pos
-	_fling_wait = 0.0
-
-	var noise := FastNoiseLite.new()
-	noise.frequency = 0.02
-	noise.fractal_octaves = 4
-	var churn := NoiseTexture2D.new()
-	churn.width = 256
-	churn.height = 256
-	churn.seamless = true
-	churn.noise = noise
-	var tube := CylinderMesh.new()
-	tube.top_radius = 0.5
-	tube.bottom_radius = 0.5
-	tube.height = 1.0
-	tube.radial_segments = 40
-	tube.rings = 40
-	tube.cap_top = false
-	tube.cap_bottom = false
-	for layer in [[80.0, 6.0, 0.55], [58.0, 3.5, 0.9]]:
-		var mat := ShaderMaterial.new()
-		mat.shader = preload("res://scripts/tornado.gdshader")
-		mat.set_shader_parameter("churn", churn)
-		mat.set_shader_parameter("height", TWISTER_TOP)
-		mat.set_shader_parameter("mouth", layer[0])
-		mat.set_shader_parameter("neck", layer[1])
-		mat.set_shader_parameter("spin", layer[2])
-		var mi := MeshInstance3D.new()
-		mi.mesh = tube
-		mi.material_override = mat
-		mi.custom_aabb = AABB(Vector3(-110, 0, -110), Vector3(220, TWISTER_TOP + 10.0, 220))
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_twister.add_child(mi)
-
-	_debris.clear()
-	_debris_back.resize(DEBRIS_EACH * 4)
-	_debris_back.fill(0.0)
-	var plank := BoxMesh.new()
-	plank.size = Vector3(4.0, 0.25, 0.8)
-	var crate := BoxMesh.new()
-	crate.size = Vector3(1.8, 1.8, 1.8)
-	var log_piece := CylinderMesh.new()
-	log_piece.top_radius = 0.4
-	log_piece.bottom_radius = 0.5
-	log_piece.height = 4.5
-	log_piece.radial_segments = 8
-	log_piece.rings = 1
-	var scrap := PrismMesh.new()
-	scrap.size = Vector3(2.4, 2.8, 0.2)
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.8
-	for shape: Mesh in [plank, crate, log_piece, scrap]:
-		shape.surface_set_material(0, mat)
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.use_colors = true
-		mm.mesh = shape
-		mm.instance_count = DEBRIS_EACH
-		for i in DEBRIS_EACH:
-			mm.set_instance_color(i, DEBRIS_COLORS[randi() % DEBRIS_COLORS.size()])
-		var bits := MultiMeshInstance3D.new()
-		bits.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-		bits.multimesh = mm
-		bits.custom_aabb = AABB(Vector3(-110, 0, -110), Vector3(220, TWISTER_TOP + 10.0, 220))
-		bits.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_twister.add_child(bits)
-		_debris.append(mm)
-
-	var drop := SphereMesh.new()
-	drop.radius = 0.5
-	drop.height = 1.0
-	drop.radial_segments = 6
-	drop.rings = 3
-	var spray_mat := StandardMaterial3D.new()
-	spray_mat.albedo_color = Color(0.92, 0.96, 1.0, 0.8)
-	spray_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	drop.material = spray_mat
-	_twister_spray = CPUParticles3D.new()
-	_twister_spray.amount = 140
-	_twister_spray.lifetime = 1.8
-	_twister_spray.local_coords = false
-	_twister_spray.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
-	_twister_spray.emission_ring_radius = 16.0
-	_twister_spray.emission_ring_inner_radius = 8.0
-	_twister_spray.emission_ring_height = 0.5
-	_twister_spray.emission_ring_axis = Vector3.UP
-	_twister_spray.direction = Vector3.UP
-	_twister_spray.spread = 35.0
-	_twister_spray.initial_velocity_min = 10.0
-	_twister_spray.initial_velocity_max = 26.0
-	_twister_spray.gravity = Vector3(0, -14, 0)
-	_twister_spray.scale_amount_min = 0.6
-	_twister_spray.scale_amount_max = 2.4
-	_twister_spray.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_twister_spray.mesh = drop
-	_twister.add_child(_twister_spray)
-
-
-## The radius debris whirls at, for a height from 0 at the sea to 1 near the top.
-func _debris_reach(climb: float) -> float:
-	return lerpf(14.0, 66.0, pow(climb, 2.0))
-
-
-## Random shoves on a heavy body, so it drifts and curves but never jerks.
-func _roam_twister(delta: float) -> void:
-	_shove_wait -= delta
-	if _shove_wait <= 0.0:
-		_shove_wait = randf_range(1.5, 4.0)
-		var ang := randf() * TAU
-		_twister_shove = Vector3(cos(ang), 0, sin(ang)) * randf_range(2.0, 6.0)
-	var home := TWISTER_HOME - _twister_pos
-	var turn_back := home.normalized() * maxf(home.length() - TWISTER_ROAM, 0.0) * 0.2
-	_twister_vel += (_twister_shove + turn_back) * delta
-	_twister_vel *= exp(-TWISTER_MOMENTUM_LOSS * delta)
-	_twister_vel = _twister_vel.limit_length(TWISTER_MAX_SPEED)
-	_twister_pos += _twister_vel * delta
-	_twister.global_position = _twister_pos
-
-
-func _update_twister(delta: float) -> void:
-	_roam_twister(delta)
-	var core := _twister.global_position
-	var target: Vector3 = player.global_position
-	var radius: float = (HIT_RADIUS_OPEN if player.wings_open else HIT_RADIUS_CLOSED) * DEBRIS_HIT_SCALE
-	var armed: bool = player.mode == player.Mode.AIR and player.has_launched
-	for k in _debris.size():
-		for i in DEBRIS_EACH:
-			var n := k * DEBRIS_EACH + i
-			var climb := fmod(_time * 0.08 + n * 0.0917, 1.0)
-			var reach := _debris_reach(climb) + sin(n * 1.7) * 4.0
-			var whirl := 3.4 - climb * 2.4
-			var ang := n * 2.4 - _time * whirl
-			var at := Vector3(cos(ang) * reach, 3.0 + climb * TWISTER_TOP * 0.82, sin(ang) * reach)
-			if _time < _debris_back[n]:
-				_debris[k].set_instance_transform(i, Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), at))
-				continue
-			if armed and (core + at).distance_squared_to(target) < radius * radius:
-				_debris_back[n] = _time + DEBRIS_RESPAWN
-				var heavy: bool = DEBRIS_HEAVY[k]
-				_strike(Vector3(sin(ang), 0, -cos(ang)) * whirl * reach + _twister_vel, heavy, 1.0 if heavy else 0.5)
-			var tumble := Vector3(_time * (2.0 + fmod(n * 0.37, 3.0)), n, _time * (1.5 + fmod(n * 0.53, 2.5)))
-			_debris[k].set_instance_transform(i, Transform3D(Basis.from_euler(tumble), at))
-	_ripple_wait -= delta
-	if _ripple_wait <= 0.0:
-		_ripple_wait = 0.45
-		level.add_ripple(core, 1.0)
-
-	var offset: Vector3 = player.global_position - core
-	offset.y = 0.0
-	var r := offset.length()
-	tornado_closeness = clampf(1.0 - r / TWISTER_REACH, 0.0, 1.0)
-	_fling_wait = maxf(_fling_wait - delta, 0.0)
-	player.tornado_pull = Vector3.ZERO
-	var airborne: bool = player.mode == player.Mode.AIR and player.has_launched
-	if player.riding_twister:
-		if airborne:
-			_ride(core, delta)
-		else:
-			player.riding_twister = false
-		return
-	var height: float = player.global_position.y
-	if not airborne or height > TWISTER_TOP or _fling_wait > 0.0:
-		return
-	var f := tornado_closeness
-	if f <= 0.0:
-		return
-	var out := offset / maxf(r, 0.1)
-	var around := Vector3(-out.z, 0, out.x)
-	if r < TWISTER_CORE:
-		player.riding_twister = true
-		_ride_angle = atan2(out.z, out.x)
-		sucked_in.emit()
-		return
-	# The air itself is spiralling in and up, and it drags you along with it,
-	# harder the deeper you go, so speed bleeds off and you're drawn to the core.
-	var flow := around * TWISTER_SWIRL - out * TWISTER_INFLOW + Vector3.UP * TWISTER_LIFT
-	var grip: float = TWISTER_DRAG * (OPEN_GRIP if player.wings_open else 1.0)
-	player.tornado_pull = (flow - player.velocity) * grip * f * f + Vector3.UP * player.gravity * f
-
-
-## Up the inside of the funnel, whirling round the wall as it widens, then out of
-## the top. Popping or tucking the wings on the way changes both the climb and exit.
-func _ride(core: Vector3, delta: float) -> void:
-	var open: bool = player.wings_open
-	var pos: Vector3 = player.global_position
-	var level_up := minf(pos.y + (CLIMB_OPEN if open else CLIMB_CLOSED) * delta, TWISTER_TOP)
-	var rise := clampf(level_up / TWISTER_TOP, 0.0, 1.0)
-	# Rides the wall, in among the debris, so the climb has to be survived.
-	var reach := _debris_reach(rise) * 0.95
-	_ride_angle += RIDE_SPEED / reach * delta
-	var side := Vector3(cos(_ride_angle), 0, sin(_ride_angle))
-	player.global_position = core + side * reach + Vector3.UP * level_up
-	player.velocity = Vector3(-side.z, 0, side.x) * RIDE_SPEED + Vector3.UP * (CLIMB_OPEN if open else CLIMB_CLOSED)
-	player.att = player.att.rotated(Vector3.UP, -RIDE_SPEED / reach * delta).orthonormalized()
-	if level_up < TWISTER_TOP:
-		return
-	player.riding_twister = false
-	_fling_wait = 8.0
-	var spin_off := Vector3(-side.z, 0, side.x)
-	var sideways: float = EJECT_OUT_OPEN if open else EJECT_OUT_CLOSED
-	player.velocity = (side + spin_off).normalized() * sideways + Vector3.UP * (EJECT_UP_OPEN if open else EJECT_UP_CLOSED)
-	player.att = Basis.looking_at(player.velocity.normalized(), Vector3.BACK)
-	flung.emit()
 
 
 ## An expanding bubble of pressure: it hits when it reaches you, harder up close.
@@ -816,7 +551,7 @@ func _add_clouds() -> void:
 	var quad := QuadMesh.new()
 	quad.size = Vector2(26, 26)
 	quad.material = mat
-	var p := _weather_particles(35, 7.0)
+	var p := _weather_particles(35 * count(Mod.CLOUD), 7.0)
 	p.emission_box_extents = Vector3(70, 30, 70)
 	p.spread = 180.0
 	p.initial_velocity_min = 0.5
