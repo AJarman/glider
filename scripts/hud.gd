@@ -33,7 +33,7 @@ class WindArrow extends Control:
 
 
 const KEYBOARD_HELP := "Ramp: W push · A/D steer      Air: {wings} wings · S pull up (hold to loop) · W push · A/D roll      {retry} retry      {pause} pause"
-const GAMEPAD_HELP := "Stick or D-pad: up push · left/right steer · down pull up      {wings} wings      {retry} retry      {pause} pause"
+const GAMEPAD_HELP := "Stick or D-pad: up push · left/right steer · down pull up      Right stick look      {wings} wings      {retry} retry      {pause} pause"
 const KEYBOARD_NAMES := {"wings": "SPACE", "next": "ENTER", "flier": "C", "retry": "R", "pause": "ESC"}
 ## Godot numbers buttons by position, so only the printed labels differ.
 const PAD_NAMES := {
@@ -48,6 +48,59 @@ const PAD_FAMILIES := {
 	"sony": "playstation", "ps3": "playstation", "ps4": "playstation", "ps5": "playstation",
 	"nintendo": "nintendo", "switch": "nintendo", "joy-con": "nintendo", "pro controller": "nintendo",
 }
+
+## Top-down radar, turned with the camera so up is the way you're looking.
+## Anything out of range sits on the rim, pointing the way to it.
+class Radar extends Control:
+	const RADIUS := 96.0
+	## Metres to the rim.
+	const RANGE := 1100.0
+	var origin := Vector3.ZERO
+	var heading := 0.0
+	## [world position, colour, is the jackpot]
+	var blips: Array = []
+	var _time := 0.0
+
+	func _process(delta: float) -> void:
+		_time += delta
+		queue_redraw()
+
+	func _draw() -> void:
+		var c := size * 0.5
+		draw_circle(c, RADIUS, Color(0.02, 0.06, 0.12, 0.55))
+		for f in [0.33, 0.66]:
+			draw_arc(c, RADIUS * f, 0, TAU, 48, Color(0.5, 0.9, 1.0, 0.18), 1.5)
+		draw_arc(c, RADIUS, 0, TAU, 64, Color(0.5, 0.9, 1.0, 0.7), 3.0)
+		# A sweeping beam, for the look of it.
+		var sweep := fmod(_time * 1.6, TAU)
+		for k in 8:
+			var a := sweep - k * 0.06
+			draw_line(c, c + Vector2.from_angle(a) * RADIUS, Color(0.5, 0.95, 1.0, 0.16 - k * 0.018), 3.0)
+		for b: Array in blips:
+			var rel: Vector3 = b[0] - origin
+			var flat := Vector2(rel.x, rel.z).rotated(-heading)
+			var d := flat.length()
+			var way := flat / maxf(d, 0.001)
+			var at := c + way * minf(d / RANGE, 1.0) * (RADIUS - 6.0)
+			var col: Color = b[1]
+			if d > RANGE:
+				# Off the scope: a pointer on the rim.
+				var tip := c + way * (RADIUS + 9.0)
+				var side := Vector2(-way.y, way.x) * 6.0
+				var back := c + way * (RADIUS - 3.0)
+				draw_colored_polygon(PackedVector2Array([tip, back + side, back - side]), col)
+			if b[2]:
+				var pulse := 0.5 + 0.5 * sin(_time * 6.0)
+				draw_circle(at, 7.0 + pulse * 4.0, Color(1.0, 0.95, 0.5, 0.35))
+				draw_circle(at, 5.0, Color(1.0, 0.95, 0.5))
+				var text_at := at + (Vector2(8, -6) if at.x < c.x else Vector2(-44, -6))
+				draw_string(get_theme_default_font(), text_at, "1000", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1.0, 0.95, 0.5))
+			elif d <= RANGE:
+				draw_circle(at, 5.5, Color(0, 0, 0, 0.6))
+				draw_circle(at, 4.0, col)
+		# You, pointing the way the camera looks.
+		draw_colored_polygon(PackedVector2Array([c + Vector2(0, -9), c + Vector2(6, 6), c + Vector2(0, 3), c + Vector2(-6, 6)]), Color.WHITE)
+
 
 class VelocityGimbal extends Control:
 	const RADIUS := 62.0
@@ -242,6 +295,7 @@ var banner: Label
 var sub_banner: Label
 var help: Label
 var wind_arrow: WindArrow
+var radar: Radar
 var mods_label: Label
 var lines: SpeedLines
 var deco: Deco
@@ -361,6 +415,17 @@ func _ready() -> void:
 	help.offset_bottom = -12
 	_tilt(help, -0.6)
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
+	radar = Radar.new()
+	radar.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	radar.offset_left = -236
+	radar.offset_right = -24
+	radar.offset_top = -280
+	radar.offset_bottom = -68
+	radar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(radar)
+	_tilt(radar, -4.0)
+	_gauges.append(radar)
 
 	wheel = RouletteWheel.new()
 	wheel.set_anchors_preset(Control.PRESET_CENTER)
@@ -561,6 +626,12 @@ func set_velocity(speed: float, climb: float, roll: float, heading: float, skim_
 		path_label.text = "LEVEL"
 	else:
 		path_label.text = "%s %d°" % ["CLIMBING" if climb > 0.0 else "DIVING", int(absf(climb))]
+
+
+func set_radar(origin: Vector3, heading: float, blips: Array) -> void:
+	radar.origin = origin
+	radar.heading = heading
+	radar.blips = blips
 
 
 func set_wind(screen_dir: Vector2, strength: float) -> void:

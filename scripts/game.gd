@@ -101,7 +101,10 @@ func _ready() -> void:
 
 	cam = CameraScript.new()
 	cam.player = player
-	cam.far = 4000.0
+	# Far enough for the mountains from the top of the ramp, with a near plane
+	# that keeps the depth buffer steady out there.
+	cam.far = 9000.0
+	cam.near = 0.2
 	cam.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(cam)
 	cam.make_current()
@@ -185,6 +188,11 @@ func _setup_input() -> void:
 	_action("next", [KEY_ENTER, KEY_KP_ENTER], wings_buttons, [])
 	_action("flier", [KEY_C], [JOY_BUTTON_Y, JOY_BUTTON_X], [])
 	_action("pause", [KEY_ESCAPE, KEY_P], [JOY_BUTTON_START], [])
+	# Look around a little: right stick, or I J K L.
+	_action("look_left", [KEY_J], [], [[JOY_AXIS_RIGHT_X, -1.0]])
+	_action("look_right", [KEY_L], [], [[JOY_AXIS_RIGHT_X, 1.0]])
+	_action("look_up", [KEY_I], [], [[JOY_AXIS_RIGHT_Y, -1.0]])
+	_action("look_down", [KEY_K], [], [[JOY_AXIS_RIGHT_Y, 1.0]])
 	# Godot's built-in menu actions have no gamepad buttons.
 	for pair in [["ui_accept", JOY_BUTTON_A], ["ui_cancel", JOY_BUTTON_B]]:
 		var e := InputEventJoypadButton.new()
@@ -711,6 +719,10 @@ func _update_hud() -> void:
 	var flying := player.mode == PlayerScript.Mode.AIR
 	var skim_ready := flying and Vector2(v.x, v.z).length() >= player.skim_min_speed
 	hud.set_velocity(speed, climb, player.bank if flying else 0.0, atan2(v.dot(right), v.dot(fwd)), skim_ready)
+	var blips := []
+	for t in level.targets:
+		blips.append([t.global_position, TargetScript.SCORE_COLORS[t.top_score()], t.kind == TargetScript.Kind.PINPRICK])
+	hud.set_radar(player.global_position, atan2(fwd.x, -fwd.z), blips)
 
 
 func _update_marker() -> void:

@@ -531,35 +531,52 @@ func _add_peak(at: Vector3, base_r: float, height: float, sides: int, cap: float
 	for k in sides:
 		var a := turn + TAU * (k + rng_m.randf_range(-0.2, 0.2)) / sides
 		ring.append(Vector3(cos(a), 0, sin(a)) * base_r * rng_m.randf_range(0.75, 1.15))
-	_peak_mesh(at, ring, apex, rock)
-	if cap > 0.0:
-		var top_ring: Array[Vector3] = []
-		for p in ring:
-			# A ragged snow line: each corner of the cap stops at its own height.
-			top_ring.append(apex.lerp(p, cap * rng_m.randf_range(0.8, 1.3)))
-		var lifted: Array[Vector3] = []
-		for p in top_ring:
-			lifted.append(apex + (p - apex) * 1.02)
-		_peak_mesh(at, lifted, apex + Vector3.UP * 1.0, snow)
+	if cap <= 0.0:
+		_peak_mesh(at, ring, [], apex, rock, null)
+		return
+	# A ragged snow line: each corner of the cap stops at its own height. The
+	# rock stops where the snow starts, so the two never overlap and flicker.
+	var snow_line: Array[Vector3] = []
+	for p in ring:
+		snow_line.append(apex.lerp(p, cap * rng_m.randf_range(0.8, 1.3)))
+	_peak_mesh(at, ring, snow_line, apex, rock, snow)
 
 
-func _peak_mesh(at: Vector3, ring: Array[Vector3], apex: Vector3, mat: Material) -> void:
+## Flat-faced slopes from ring up to apex; with a snow_line, rock below it and
+## snow above.
+func _peak_mesh(at: Vector3, ring: Array[Vector3], snow_line: Array[Vector3], apex: Vector3, rock: Material, snow: Material) -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var mid := Vector3.ZERO
-	for p in ring:
-		mid += p
-	mid /= ring.size()
-	for k in ring.size():
+	var cap := SurfaceTool.new()
+	cap.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var n := ring.size()
+	for k in n:
 		var a := ring[k]
-		var b := ring[(k + 1) % ring.size()]
+		var b := ring[(k + 1) % n]
 		var nrm := (b - a).cross(apex - a).normalized()
-		if nrm.dot((a + b) * 0.5 - mid) < 0.0:
+		if nrm.dot(Vector3((a + b).x, 0, (a + b).z)) < 0.0:
 			nrm = -nrm
-		var pts := [a, b, apex] if (b - a).cross(apex - a).dot(nrm) < 0.0 else [a, apex, b]
-		for p in pts:
-			st.set_normal(nrm)
-			st.add_vertex(p)
+		if snow_line.is_empty():
+			_peak_tri(st, a, b, apex, nrm)
+			continue
+		var sa := snow_line[k]
+		var sb := snow_line[(k + 1) % n]
+		_peak_tri(st, a, b, sb, nrm)
+		_peak_tri(st, a, sb, sa, nrm)
+		_peak_tri(cap, sa, sb, apex, nrm)
+	_peak_add(at, st, rock)
+	if not snow_line.is_empty():
+		_peak_add(at, cap, snow)
+
+
+func _peak_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, nrm: Vector3) -> void:
+	var pts := [a, b, c] if (b - a).cross(c - a).dot(nrm) < 0.0 else [a, c, b]
+	for p in pts:
+		st.set_normal(nrm)
+		st.add_vertex(p)
+
+
+func _peak_add(at: Vector3, st: SurfaceTool, mat: Material) -> void:
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	mi.material_override = mat
