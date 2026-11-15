@@ -28,18 +28,26 @@ uniform sampler2D depth_tex : hint_depth_texture, filter_linear, repeat_disable;
 varying vec2 base;
 varying float swell;
 
-// Height and slope of the swell at p, with the crests sharpened.
-vec3 swell_at(vec2 p, float time) {
+// Height and slope of the swell at p, with the crests sharpened. Seen from
+// dist metres away, waves too short to resolve fade out instead of shimmering
+// into a regular pattern.
+vec3 swell_at(vec2 p, float time, float dist) {
 	vec3 sum = vec3(0.0);
 	for (int i = 0; i < WAVE_COUNT; i++) {
 		vec4 w = WAVES[i];
 		float k = TAU / w.z;
 		float phase = k * dot(w.xy, p) + sqrt(9.8 * k) * time + float(i) * 1.7;
 		float crest = sin(phase) * 0.5 + 0.5;
+		float keep = 1.0 - smoothstep(w.z * 6.0, w.z * 20.0, dist);
 		sum.x += w.w * (crest * crest * 2.0 - 1.0);
-		sum.yz += w.xy * w.w * k * 2.0 * crest * cos(phase);
+		sum.yz += w.xy * w.w * k * 2.0 * crest * cos(phase) * keep;
 	}
 	return sum;
+}
+
+// Each chop layer is turned to its own angle, so their tiles never line up.
+vec2 turn(vec2 p, float a) {
+	return mat2(vec2(cos(a), sin(a)), vec2(-sin(a), cos(a))) * p;
 }
 
 // Height, slope and foam of the rings spreading from disturbances.
@@ -65,7 +73,7 @@ vec4 ripples_at(vec2 p) {
 void vertex() {
 	base = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
 	float far = distance(base, CAMERA_POSITION_WORLD.xz);
-	vec3 s = swell_at(base, TIME);
+	vec3 s = swell_at(base, TIME, 0.0);
 	swell = s.x / SWELL_MAX;
 	VERTEX.y += s.x * (1.0 + storm * 0.25) * (1.0 - smoothstep(900.0, 2400.0, far));
 	VERTEX.xz -= s.yz * 0.35;
@@ -78,16 +86,24 @@ void fragment() {
 	vec2 p = base;
 
 	// Slow patches of rougher and calmer water, like gusts crossing the sea.
-	float gust = texture(chop, p / 620.0 + TIME * vec2(0.002, 0.0013)).r;
+	float gust = texture(chop, turn(p, 0.4) / 620.0 + TIME * vec2(0.002, 0.0013)).r * 0.6
+		+ texture(chop, turn(p, 2.1) / 1730.0 - TIME * vec2(0.0007, 0.001)).g * 0.4;
 	float rough = mix(0.45, 1.35, smoothstep(0.42, 0.58, gust)) + storm;
 
-	vec3 s = swell_at(p, TIME);
-	vec2 a = texture(chop, p / 41.0 + TIME * vec2(0.012, 0.007)).rg * 2.0 - 1.0;
-	vec2 b = texture(chop, p / 17.0 - TIME * vec2(0.021, 0.016)).rg * 2.0 - 1.0;
-	vec2 c = texture(chop, p / 6.3 + TIME * vec2(-0.03, 0.044)).rg * 2.0 - 1.0;
+	vec3 s = swell_at(p, TIME, dist);
+	float mid_range = 1.0 - smoothstep(350.0, 1300.0, dist);
+	float far_range = smoothstep(150.0, 700.0, dist);
+	vec2 a = texture(chop, turn(p, 0.9) / 41.0 + TIME * vec2(0.012, 0.007)).rg * 2.0 - 1.0;
+	vec2 b = texture(chop, turn(p, 2.3) / 17.0 - TIME * vec2(0.021, 0.016)).rg * 2.0 - 1.0;
+	vec2 c = texture(chop, turn(p, 4.1) / 6.3 + TIME * vec2(-0.03, 0.044)).rg * 2.0 - 1.0;
+	// Broad, slow undulations take over in the distance, where the fine chop
+	// would only tile.
+	vec2 e = texture(chop, turn(p, 5.3) / 260.0 + TIME * vec2(0.004, -0.003)).rg * 2.0 - 1.0;
+	vec2 f = texture(chop, turn(p, 1.7) / 690.0 - TIME * vec2(0.002, 0.003)).rg * 2.0 - 1.0;
 	vec2 d = texture(chop, p / 2.3 + TIME * vec2(0.06, -0.05)).rg * 2.0 - 1.0;
 	float close = 1.0 - smoothstep(25.0, 110.0, dist);
-	vec2 slope = s.yz + (a * 0.12 + (b * 0.17 + c * 0.17) * near + d * 0.14 * close) * rough;
+	vec2 slope = s.yz + (a * 0.12 * mid_range + (b * 0.17 + c * 0.17) * near + d * 0.14 * close) * rough;
+	slope += (e * 0.07 + f * 0.05) * far_range * (0.6 + rough * 0.4);
 	vec4 ring = ripples_at(p);
 	slope += ring.yz;
 

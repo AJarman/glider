@@ -2,6 +2,8 @@ extends Node3D
 ## Round modifiers: rolls the roulette result and owns everything each modifier
 ## puts in the world, from air mines to weather.
 
+const LevelScript := preload("res://scripts/level.gd")
+
 signal detonated
 ## A fragment struck the flier; impact is its velocity relative to them.
 signal shrapnel_hit(impact: Vector3)
@@ -30,7 +32,10 @@ const ANY_CHANCE := 2.0 / 3.0
 ## Players pick how many spins to take, from 1 to this; each one multiplies
 ## the round's score and stacks another roll of the wheel.
 const MAX_SPINS := 5
-const MINE_COUNT := 14
+const MINE_COUNT := 26
+## Mines hang between the ramp and the far targets, up to the launch height.
+const MINE_NEAR := -500.0
+const MINE_FAR_FROM_LIP := 60.0
 const MINE_SCALE := 3.0
 ## Each mine has its own fuse, somewhere in this range.
 const FUSE_MIN := 22.0
@@ -267,7 +272,7 @@ func _spawn_mines(rng: RandomNumberGenerator) -> void:
 	for i in MINE_COUNT * count(Mod.MINES):
 		var m := Node3D.new()
 		add_child(m)
-		m.global_position = Vector3(rng.randf_range(-60, 60), rng.randf_range(14, 55), rng.randf_range(-420, -60))
+		m.global_position = Vector3(rng.randf_range(-60, 60), rng.randf_range(14, LevelScript.LIP.y), rng.randf_range(MINE_NEAR, LevelScript.LIP.z - MINE_FAR_FROM_LIP))
 		m.scale = Vector3.ONE * MINE_SCALE
 		_fuses[m] = rng.randf_range(FUSE_MIN, FUSE_MAX)
 		_mesh(m, body, shell, Transform3D.IDENTITY)

@@ -1,18 +1,19 @@
 extends Node3D
-## Builds the launch ramp, the sea, the target field and the islands.
+## Builds the launch ramp, the sea, the target field and the mountains.
 
 const TargetScript := preload("res://scripts/target.gd")
 
-const LIP := Vector3(0, 55, 0)
+## The launch lip: well back from the targets, and high.
+const LIP := Vector3(0, 95, 300)
 ## Length of each slice of the ramp's centreline.
-const SEG := 2.6
-const RAMP_WIDTH := 8.0
-const RAIL_H := 1.2
+const SEG := 4.0
+const RAMP_WIDTH := 12.0
+const RAIL_H := 1.5
 const TARGET_TOP := 2.5
 const RIPPLES := 24
 const WATER_REACH := 3500.0
 ## The tiny far-off jackpot target.
-const PINPRICK_AT := Vector3(30, 0, -760)
+const PINPRICK_AT := Vector3(60, 0, -1500)
 
 var ramp_body: StaticBody3D
 var ramp_pts := PackedVector3Array()
@@ -30,7 +31,7 @@ func _ready() -> void:
 	_build_water()
 	_build_ramp()
 	_build_targets()
-	_build_scenery()
+	_build_mountains()
 	_build_landmarks()
 
 
@@ -279,7 +280,7 @@ func _build_supports(hw: float) -> void:
 		for sx in [-1.0, 1.0]:
 			var head := Vector3(sx * x, top.y, top.z)
 			var foot := Vector3(sx * (x + top.y * 0.05), -4.0, top.z)
-			_beam(foot, head, 0.34, steel)
+			_beam(foot, head, 0.5, steel)
 			tops.append(head)
 			var pad := CylinderMesh.new()
 			pad.top_radius = 1.0
@@ -312,7 +313,7 @@ func _build_supports(hw: float) -> void:
 
 ## Level platform behind the start, so the top of the ramp isn't an open end.
 func _build_start_deck() -> void:
-	var length := 12.0
+	var length := 18.0
 	var top := ramp_pts[0]
 	var deck := BoxMesh.new()
 	deck.size = Vector3(RAMP_WIDTH + 0.2, 0.7, length)
@@ -328,7 +329,7 @@ func _build_start_deck() -> void:
 	var x := RAMP_WIDTH * 0.5 - 0.8
 	for sx in [-1.0, 1.0]:
 		var head := Vector3(sx * x, top.y - 0.7, top.z + length - 1.0)
-		_beam(Vector3(sx * (x + top.y * 0.05), -4.0, head.z), head, 0.34, steel)
+		_beam(Vector3(sx * (x + top.y * 0.05), -4.0, head.z), head, 0.5, steel)
 
 
 func _beam(from: Vector3, to: Vector3, thick: float, mat: Material) -> void:
@@ -394,8 +395,8 @@ func _build_targets() -> void:
 	var defs := [
 		[Vector3(0, 0, -240), K.DISC, 20.0, [10, 20, 30, 50, 100], "THE BIG ONE"],
 		[Vector3(-80, 0, -350), K.MOVER, 13.0, [20, 50, 80, 120, 200], "THE DRIFTER"],
-		[Vector3(75, 0, -370), K.SPLITTER, 14.0, [30, 60, 100, 150, 250], "THE SPLITTER"],
-		[Vector3(0, 0, -500), K.PYRAMID, 14.0, [50, 100, 200, 300, 500], "THE PYRAMID"],
+		[Vector3(85, 0, -380), K.SPLITTER, 21.0, [50, 100, 200, 300, 400], "THE SPLITTER"],
+		[Vector3(0, 0, -500), K.PYRAMID, 18.0, [50, 100, 200, 300, 500], "THE PYRAMID"],
 		[Vector3(-140, 0, -210), K.DISC, 9.0, [30, 60, 100, 150, 250], "LEFT FLANK"],
 		[Vector3(140, 0, -240), K.DISC, 9.0, [30, 60, 100, 150, 250], "RIGHT FLANK"],
 		[PINPRICK_AT, K.PINPRICK, 2.5, [1000], "THE PINPRICK"],
@@ -408,163 +409,11 @@ func _build_targets() -> void:
 		targets.append(t)
 
 
-func _build_scenery() -> void:
-	var rng_s := RandomNumberGenerator.new()
-	rng_s.seed = 20240611
-	var spots := [
-		Vector3(-240, 0, -400), Vector3(250, 0, -120), Vector3(-180, 0, 40),
-		Vector3(190, 0, -600), Vector3(-90, 0, -700), Vector3(300, 0, -420),
-	]
-	var plants := {
-		"Pine_1": [], "Pine_3": [], "CommonTree_1": [], "CommonTree_3": [],
-		"Bush_Common": [], "Fern_1": [], "Grass_Common_Tall": [],
-	}
-	var rock_mat := _island_rock_material()
-	var sand := StandardMaterial3D.new()
-	sand.albedo_color = Color(0.86, 0.78, 0.58)
-	sand.roughness = 0.95
-	for i in spots.size():
-		var island := Node3D.new()
-		island.position = spots[i]
-		island.rotation.y = rng_s.randf() * TAU
-		add_child(island)
-		var main_scale := 11.0 + 3.0 * (i % 3)
-		_add_beach(island, main_scale * 2.5, sand)
-		_torii(island, Vector3(main_scale * 1.75, 0.5, 0), 0.9, PI / 2)
-		var main := _add_rock(island, "Rock_Medium_%d" % (i % 3 + 1), Vector3(0, -main_scale * 0.25, 0), main_scale, rng_s.randf() * TAU, rock_mat)
-		for k in 3:
-			var ang := rng_s.randf() * TAU
-			var pos := Vector3(cos(ang), 0, sin(ang)) * main_scale * rng_s.randf_range(1.5, 2.1)
-			var s := main_scale * rng_s.randf_range(0.28, 0.45)
-			_add_rock(island, "Rock_Medium_%d" % (k % 3 + 1), pos + Vector3(0, -s * 0.3, 0), s, rng_s.randf() * TAU, rock_mat)
-		_scatter(main, plants, rng_s)
-	for name in plants:
-		_add_plants(name, plants[name])
-
-
-func _add_beach(parent: Node3D, radius: float, mat: Material) -> void:
-	var cone := CylinderMesh.new()
-	cone.top_radius = radius * 0.72
-	cone.bottom_radius = radius
-	cone.height = 6.0
-	cone.radial_segments = 64
-	var mi := MeshInstance3D.new()
-	mi.mesh = cone
-	mi.material_override = mat
-	mi.position.y = -2.3
-	parent.add_child(mi)
-	var shape := CylinderShape3D.new()
-	shape.radius = radius * 0.8
-	shape.height = 2.0
-	var cs := CollisionShape3D.new()
-	cs.shape = shape
-	var body := StaticBody3D.new()
-	body.position.y = -0.3
-	body.add_child(cs)
-	parent.add_child(body)
-
-
-func _island_rock_material() -> StandardMaterial3D:
-	# Triplanar, so the small rock texture stays fine on rocks scaled up to islands.
-	var src: StandardMaterial3D = _nature_mesh("Rock_Medium_1").surface_get_material(0)
-	var mat: StandardMaterial3D = src.duplicate()
-	mat.uv1_triplanar = true
-	mat.uv1_world_triplanar = true
-	mat.uv1_scale = Vector3.ONE * 0.12
-	mat.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-	return mat
-
-
-func _add_rock(parent: Node3D, name: String, pos: Vector3, s: float, yaw: float, mat: Material) -> MeshInstance3D:
-	var mesh := _nature_mesh(name)
-	var mi := MeshInstance3D.new()
-	mi.mesh = mesh
-	mi.material_override = mat
-	mi.position = pos
-	mi.rotation.y = yaw
-	mi.scale = Vector3.ONE * s
-	parent.add_child(mi)
-	# Collision shapes can't be scaled, so bake the scale into the faces.
-	var body := StaticBody3D.new()
-	parent.add_child(body)
-	var faces := mesh.get_faces()
-	for i in faces.size():
-		faces[i] = mi.transform * faces[i]
-	var shape := ConcavePolygonShape3D.new()
-	shape.set_faces(faces)
-	var cs := CollisionShape3D.new()
-	cs.shape = shape
-	body.add_child(cs)
-	return mi
-
-
-## Picks spots on the rock's upward faces for trees and undergrowth.
-func _scatter(rock: MeshInstance3D, plants: Dictionary, rng_s: RandomNumberGenerator) -> void:
-	var faces := rock.mesh.get_faces()
-	var xf := rock.global_transform
-	var tops: Array = []
-	for i in range(0, faces.size(), 3):
-		var a := xf * faces[i]
-		var b := xf * faces[i + 1]
-		var c := xf * faces[i + 2]
-		var n := (b - a).cross(c - a).normalized()
-		if absf(n.y) > 0.7 and (a + b + c).y / 3.0 > 3.0:
-			tops.append([a, b, c])
-	if tops.is_empty():
-		return
-	var names: Array = plants.keys()
-	for i in 34:
-		var name: String = names[0 if i < 3 else 1 if i < 5 else 2 if i < 7 else 3 if i < 8 else 4 + i % 3]
-		var tri: Array = tops[rng_s.randi_range(0, tops.size() - 1)]
-		var u := sqrt(rng_s.randf())
-		var v := rng_s.randf()
-		var p: Vector3 = tri[0] * (1.0 - u) + tri[1] * (u * (1.0 - v)) + tri[2] * (u * v)
-		var s := rng_s.randf_range(1.4, 2.2) if i < 8 else rng_s.randf_range(1.5, 2.8)
-		plants[name].append(Transform3D(Basis(Vector3.UP, rng_s.randf() * TAU).scaled(Vector3.ONE * s), p + Vector3.DOWN * 0.2))
-
-
-func _add_plants(name: String, xforms: Array) -> void:
-	if xforms.is_empty():
-		return
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = _sakura(_nature_mesh(name)) if name.begins_with("CommonTree") else _nature_mesh(name)
-	mm.instance_count = xforms.size()
-	for i in xforms.size():
-		mm.set_instance_transform(i, xforms[i])
-	var mi := MultiMeshInstance3D.new()
-	mi.multimesh = mm
-	add_child(mi)
-
-
-## Blossom-pink copy of a tree, keeping the shape of its leaf cards.
-func _sakura(mesh: Mesh) -> Mesh:
-	var src: StandardMaterial3D = mesh.surface_get_material(1)
-	var sh := Shader.new()
-	sh.code = """
-shader_type spatial;
-render_mode cull_disabled, diffuse_toon;
-uniform sampler2D leaves : source_color, filter_linear_mipmap;
-void fragment() {
-	vec4 t = texture(leaves, UV);
-	ALPHA = t.a;
-	ALPHA_SCISSOR_THRESHOLD = 0.5;
-	ALBEDO = vec3(1.0, 0.62, 0.74) * (0.65 + 0.9 * dot(t.rgb, vec3(0.333)));
-}
-"""
-	var mat := ShaderMaterial.new()
-	mat.shader = sh
-	mat.set_shader_parameter("leaves", src.albedo_texture)
-	var copy: Mesh = mesh.duplicate()
-	copy.surface_set_material(1, mat)
-	return copy
-
-
 func _build_landmarks() -> void:
 	# Gates over the ramp: one to start, one at the launch.
 	var last := ramp_pts.size() - 1
-	_torii(self, ramp_pts[5], 1.75, 0.0)
-	_torii(self, ramp_pts[last - 3], 1.75, 0.0)
+	_torii(self, ramp_pts[5], 2.5, 0.0)
+	_torii(self, ramp_pts[last - 3], 2.5, 0.0)
 
 	# Paper lanterns along the rails.
 	var paper := StandardMaterial3D.new()
@@ -584,30 +433,6 @@ func _build_landmarks() -> void:
 			mi.material_override = paper
 			mi.position = ramp_pts[i] + Vector3(sx * (RAMP_WIDTH * 0.5 + 0.02), RAIL_H + 0.45, 0)
 			add_child(mi)
-
-	# A snow-capped volcano on the horizon.
-	var rock := StandardMaterial3D.new()
-	rock.albedo_color = Color(0.34, 0.42, 0.62)
-	var snow := StandardMaterial3D.new()
-	snow.albedo_color = Color(0.97, 0.97, 1.0)
-	var cap_height := 150.0
-	var height := 620.0
-	var top := 60.0
-	var base := 1500.0
-	var cap_base := lerpf(top, base, cap_height / height)
-	for part in [[height - cap_height, top + (base - top) * cap_height / height, base, rock, (height - cap_height) * 0.5],
-			[cap_height, top, cap_base, snow, height - cap_height * 0.5]]:
-		var cone := CylinderMesh.new()
-		cone.height = part[0]
-		cone.top_radius = part[1]
-		cone.bottom_radius = part[2]
-		cone.radial_segments = 48
-		var mi := MeshInstance3D.new()
-		mi.mesh = cone
-		mi.material_override = part[3]
-		mi.position = Vector3(180, part[4] - 5.0, -3000)
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(mi)
 
 	# Cherry blossom drifting past the camera.
 	var quad := QuadMesh.new()
@@ -673,8 +498,79 @@ func _gate_part(gate: Node3D, mesh: Mesh, mat: Material, pos: Vector3) -> void:
 	gate.add_child(mi)
 
 
-func _nature_mesh(name: String) -> Mesh:
-	var scene: Node = load("res://assets/nature/%s.gltf" % name).instantiate()
-	var mesh: Mesh = (scene.find_children("*", "MeshInstance3D", true, false)[0] as MeshInstance3D).mesh
-	scene.free()
-	return mesh
+
+## A ring of faceted, low-poly peaks on the horizon, with one big snowy
+## volcano straight ahead.
+func _build_mountains() -> void:
+	var rng_m := RandomNumberGenerator.new()
+	rng_m.seed = 7041
+	# Painted-in haze instead of fog, so the facets stay crisp and flat.
+	var rock := _flat_mat(Color(0.42, 0.48, 0.7))
+	var far_rock := _flat_mat(Color(0.6, 0.63, 0.82))
+	var snow := _flat_mat(Color(0.95, 0.95, 1.0))
+	_add_peak(Vector3(180, -5, -3000), 1500.0, 620.0, 9, 0.28, rock, snow, rng_m)
+	var count := 30
+	for i in count:
+		var ang := TAU * (i + rng_m.randf_range(-0.3, 0.3)) / count
+		var dist := rng_m.randf_range(1900.0, 3300.0)
+		var at := Vector3(sin(ang) * dist, -5, -cos(ang) * dist)
+		# Keep the volcano clear.
+		if at.distance_to(Vector3(180, 0, -3000)) < 1300.0:
+			continue
+		var h := rng_m.randf_range(140.0, 480.0)
+		var cap := 0.22 if h > 300.0 else 0.0
+		_add_peak(at, h * rng_m.randf_range(1.3, 2.2), h, rng_m.randi_range(5, 8), cap, rock if dist < 2600.0 else far_rock, snow, rng_m)
+
+
+## One peak: a jagged n-sided cone with flat faces, and a snow cap over the
+## top share of its height if cap > 0.
+func _add_peak(at: Vector3, base_r: float, height: float, sides: int, cap: float, rock: Material, snow: Material, rng_m: RandomNumberGenerator) -> void:
+	var apex := Vector3(rng_m.randf_range(-0.12, 0.12) * base_r, height, rng_m.randf_range(-0.12, 0.12) * base_r)
+	var ring: Array[Vector3] = []
+	var turn := rng_m.randf() * TAU
+	for k in sides:
+		var a := turn + TAU * (k + rng_m.randf_range(-0.2, 0.2)) / sides
+		ring.append(Vector3(cos(a), 0, sin(a)) * base_r * rng_m.randf_range(0.75, 1.15))
+	_peak_mesh(at, ring, apex, rock)
+	if cap > 0.0:
+		var top_ring: Array[Vector3] = []
+		for p in ring:
+			# A ragged snow line: each corner of the cap stops at its own height.
+			top_ring.append(apex.lerp(p, cap * rng_m.randf_range(0.8, 1.3)))
+		var lifted: Array[Vector3] = []
+		for p in top_ring:
+			lifted.append(apex + (p - apex) * 1.02)
+		_peak_mesh(at, lifted, apex + Vector3.UP * 1.0, snow)
+
+
+func _peak_mesh(at: Vector3, ring: Array[Vector3], apex: Vector3, mat: Material) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var mid := Vector3.ZERO
+	for p in ring:
+		mid += p
+	mid /= ring.size()
+	for k in ring.size():
+		var a := ring[k]
+		var b := ring[(k + 1) % ring.size()]
+		var nrm := (b - a).cross(apex - a).normalized()
+		if nrm.dot((a + b) * 0.5 - mid) < 0.0:
+			nrm = -nrm
+		var pts := [a, b, apex] if (b - a).cross(apex - a).dot(nrm) < 0.0 else [a, apex, b]
+		for p in pts:
+			st.set_normal(nrm)
+			st.add_vertex(p)
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = mat
+	mi.position = at
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+
+
+func _flat_mat(c: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.roughness = 1.0
+	m.disable_fog = true
+	return m
