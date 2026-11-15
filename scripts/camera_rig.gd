@@ -18,6 +18,10 @@ var _target := Vector3.ZERO
 var _slope := 0.0
 var _shake := 0.0
 var _wobble := 0.0
+## How far the player has swung the view: x yaw, y pitch, each -1 to 1.
+var _look_off := Vector2.ZERO
+const LOOK_YAW := 70.0
+const LOOK_PITCH := 35.0
 
 
 ## Starts a tour from wherever the camera is now.
@@ -40,6 +44,7 @@ func snap() -> void:
 	_ahead = 4.0
 	_target = player.global_position
 	_slope = 0.45
+	_look_off = Vector2.ZERO
 	global_position = _desired()
 	_look()
 
@@ -56,6 +61,9 @@ func _process(delta: float) -> void:
 			look_at(_tour_look, Vector3.UP)
 		return
 	_target = player.focus()
+	# The right stick swings the camera round the flier; let go and it eases back.
+	var stick := Input.get_vector("look_left", "look_right", "look_up", "look_down")
+	_look_off = _look_off.lerp(stick, 1.0 - exp(-6.0 * delta))
 	var v := player.focus_velocity()
 	var hv := Vector3(v.x, 0, v.z)
 	var gliding := player.mode == PlayerScript.Mode.AIR and player.wings_open
@@ -130,11 +138,18 @@ func _turn(a: Vector3, b: Vector3, rate: float) -> Vector3:
 
 
 func _desired() -> Vector3:
-	return _target - dir * _dist + cam_up * _height + Vector3.UP * (_slope * _dist)
+	var off := -dir * _dist + cam_up * _height + Vector3.UP * (_slope * _dist)
+	off = off.rotated(Vector3.UP, -deg_to_rad(_look_off.x * LOOK_YAW))
+	var side := off.cross(Vector3.UP)
+	if side.length() > 0.01:
+		off = off.rotated(side.normalized(), deg_to_rad(_look_off.y * LOOK_PITCH))
+	return _target + off
 
 
 func _look() -> void:
-	var t := _target + dir * _ahead + cam_up * 0.5
+	# Looking around centres the flier; otherwise look a little ahead of them.
+	var ahead := _ahead * (1.0 - minf(_look_off.length(), 1.0))
+	var t := _target + dir * ahead + cam_up * 0.5
 	var d := t - global_position
 	if d.length() > 0.1 and absf(d.normalized().dot(cam_up)) < 0.99:
 		look_at(t, cam_up)

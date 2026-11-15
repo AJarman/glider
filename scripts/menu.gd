@@ -20,6 +20,7 @@ const CONTROLS := [
 	["Choose spins (score x1 to x5)", "A D or LEFT RIGHT", "Stick or D-pad left, right"],
 	["Skip / next / spin", "ENTER or SPACE", "{next}"],
 	["Change flier", "C", "{flier}"],
+	["Look around", "I J K L", "Right stick"],
 	["Retry round", "R", "{retry}"],
 	["Pause", "ESC or P", "{pause}"],
 ]
