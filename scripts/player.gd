@@ -51,13 +51,17 @@ enum Mode { FROZEN, GROUND, AIR, RAGDOLL, SINK }
 @export_group("Water")
 ## Ground effect starts at skim_speed and is full strength 15 m/s above it.
 @export var skim_speed := 25.0
-@export var ground_effect_height := 6.0
-@export var ground_effect_lift := 0.8
-@export var ground_effect_drag := 0.6
+@export var ground_effect_height := 8.0
+@export var ground_effect_lift := 1.1
+@export var ground_effect_drag := 0.75
+## Riding the cushion of air over the water pushes the flier along (m/s²),
+## fading out as it nears ground_effect_top_speed.
+@export var ground_effect_push := 2.5
+@export var ground_effect_top_speed := 60.0
 ## Slowest speed and steepest descent (rise/run) that bounce off the water.
 @export var skim_min_speed := 28.0
 @export var skim_max_slope := 0.36
-@export var skim_keep := 0.85
+@export var skim_keep := 0.9
 @export var skim_rebound := 0.5
 @export var sink_speed := 9.0
 ## Slowest impact that draws blood.
@@ -362,6 +366,7 @@ func _air_step(delta: float, inp: Vector2) -> void:
 		var lift := clampf(lift_k * air_sp * air_sp * cl * (1.0 + ground_effect_lift * ge), -max_g * gravity, max_g * gravity)
 		v += lift_dir * lift * delta
 		v -= vd * q * (cd0 + cdi * cl * cl) * (1.0 - ground_effect_drag * ge) * delta
+		v += Vector3(vd.x, 0, vd.z) * ground_effect_push * ge * clampf((ground_effect_top_speed - sp) / 10.0, 0.0, 1.0) * delta
 		v += wind * wind_factor * delta
 	elif sp > 0.0:
 		var a := deg_to_rad(aoa)
@@ -384,7 +389,7 @@ func _air_step(delta: float, inp: Vector2) -> void:
 ## 0 to 1: strongest at high speed right on the water.
 func _ground_effect(sp: float) -> float:
 	var near := clampf(1.0 - global_position.y / ground_effect_height, 0.0, 1.0)
-	return near * near * clampf((sp - skim_speed) / 15.0, 0.0, 1.0)
+	return near * clampf((sp - skim_speed) / 15.0, 0.0, 1.0)
 
 
 func _post_move(delta: float, pre_vel: Vector3) -> void:

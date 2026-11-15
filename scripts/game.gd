@@ -64,6 +64,11 @@ var _spin_stopped := false
 var _forced_mods = null
 ## Set by --spins=N to fix how many spins the autopilot takes.
 var _forced_spins := 0
+## Autoplay hugs the water to ride the ground effect (--skim).
+var _auto_skim := false
+var _auto_log := 0.0
+## Whether this flight has had its "GROUND EFFECT!" pop yet.
+var _ge_shown := false
 ## Set by --target=N to aim the autopilot at one target.
 var _forced_target := -1
 var _flyby: Array = []
@@ -160,6 +165,8 @@ func _read_forced_mods() -> void:
 				_forced_mods.append(ModifiersScript.Mod[mod_name.to_upper()])
 		elif arg.begins_with("--target="):
 			_forced_target = arg.trim_prefix("--target=").to_int()
+		elif arg == "--skim":
+			_auto_skim = true
 		elif arg.begins_with("--rounds="):
 			rounds = arg.trim_prefix("--rounds=").to_int()
 		elif arg.begins_with("--spins="):
@@ -634,6 +641,11 @@ func _update_audio(delta: float) -> void:
 
 ## A low rattle down the ramp, and buffeting in a fast dive or a hurricane.
 func _update_hum(rush: float) -> void:
+	# Teach the trick: the first good ride on the cushion over the water.
+	if state == State.FLIGHT and not _ge_shown and player.ground_effect > 0.35:
+		_ge_shown = true
+		hud.pop("GROUND EFFECT!", Color(0.5, 1.0, 0.95))
+		Rumble.pulse(0.3, 0.2, 0.2)
 	var weak := 0.0
 	var strong := 0.0
 	if state == State.RAMP and player.mode == PlayerScript.Mode.GROUND:
@@ -745,6 +757,7 @@ func _on_launched() -> void:
 	if autoplay: print("launch v=%.1f pos=%s" % [player.velocity.length(), player.global_position])
 	state = State.FLIGHT
 	state_time = 0.0
+	_ge_shown = false
 	hud.show_banner("FLY!", "{wings} to pop your wings", Color(1, 1, 1), 1.2, 0.9)
 	sfx.play("launch")
 	Rumble.pulse(0.6, 0.7, 0.35)
@@ -893,12 +906,29 @@ func _autopilot() -> void:
 			if hv.length() > 1.0 and player.wings_open:
 				var want := clampf(rad_to_deg(-hv.signed_angle_to(to, Vector3.UP)) * 2.0, -35.0, 35.0)
 				inp.x = clampf((want - player.bank) / 20.0, -1.0, 1.0)
-			if not _auto_dropping:
+			_auto_log += get_physics_process_delta_time()
+			if _auto_log > 3.0:
+				_auto_log = 0.0
+				print("  t=%.0f pos=%s v=%.1f ge=%.2f" % [state_time, player.global_position.round(), player.velocity.length(), player.ground_effect])
+			if _auto_skim and not _auto_dropping and to.length() < 260.0 and hv.length() > 28.0:
+				# Zoom up off the water to bleed speed before dropping in.
+				inp.y = 1.0
+			elif _auto_skim and not _auto_dropping and to.length() >= 260.0:
+				if not player.wings_open and player.air_time > 0.4:
+					player.set_wings(true)
+				# Dive down to just over the waves, then hold there.
+				var alt_w := player.global_position.y
+				var want_vy := clampf((2.5 - alt_w) * 0.7, -25.0, 3.0)
+				inp.y = clampf((want_vy - player.velocity.y) * 0.3, -1.0, 1.0)
+				if to.length() < hv.length() * 0.35:
+					player.set_wings(false)
+					_auto_dropping = true
+			elif not _auto_dropping:
 				if not player.wings_open and player.air_time > 0.4:
 					player.set_wings(true)
 				var alt := player.global_position.y - level.TARGET_TOP
 				var t_fall := sqrt(2.0 * maxf(alt, 0.1) / (player.gravity * (1.0 - player.swan_lift)))
-				if to.length() < hv.length() * t_fall * 0.7:
+				if to.length() < hv.length() * t_fall * 0.9:
 					player.set_wings(false)
 					_auto_dropping = true
 				elif alt < 6.0:

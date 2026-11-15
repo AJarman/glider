@@ -6,6 +6,11 @@ const FONT := preload("res://assets/fonts/DelaGothicOne-Regular.ttf")
 const CRIMSON := Color(0.78, 0.05, 0.13)
 ## Banners sit this far above centre, to leave the flier in view.
 const BANNER_LIFT := 150.0
+## The HUD is see-through, so the flight shows behind it.
+const HUD_ALPHA := 0.85
+const BANNER_ALPHA := 0.88
+## Banners land at a fresh angle each time, up to this many degrees.
+const BANNER_TILT := 5.0
 
 class WindArrow extends Control:
 	var dir := Vector2.ZERO
@@ -132,27 +137,34 @@ class Deco extends Control:
 		set(value):
 			stripe = value
 			queue_redraw()
+	## Which way the banner slash leans this time, -1 to 1.
+	var lean := 0.4
 
 	func _draw() -> void:
 		var w := size.x
 		var h := size.y
-		var plate := Color(0.03, 0.02, 0.06, 0.62)
-		draw_colored_polygon(PackedVector2Array([Vector2.ZERO, Vector2(340, 0), Vector2(296, 112), Vector2(0, 112)]), plate)
-		draw_line(Vector2(0, 112), Vector2(296, 112), CRIMSON, 4.0)
-		draw_colored_polygon(PackedVector2Array([Vector2(w - 300, 0), Vector2(w, 0), Vector2(w, 100), Vector2(w - 262, 100)]), plate)
-		draw_line(Vector2(w - 262, 100), Vector2(w, 100), CRIMSON, 4.0)
-		draw_rect(Rect2(0, h - 46, w, 46), plate)
-		draw_line(Vector2(0, h - 46), Vector2(w, h - 46), CRIMSON, 3.0)
+		var plate := Color(0.03, 0.02, 0.06, 0.45)
+		# Skewed plates, none of them quite square to the screen.
+		var tl := PackedVector2Array([Vector2(0, 0), Vector2(450, 0), Vector2(392, 152), Vector2(0, 166)])
+		draw_colored_polygon(tl, plate)
+		draw_line(tl[3], tl[2], CRIMSON, 5.0, true)
+		var tr := PackedVector2Array([Vector2(w - 430, 0), Vector2(w, 0), Vector2(w, 140), Vector2(w - 372, 126)])
+		draw_colored_polygon(tr, plate)
+		draw_line(tr[3], tr[2], CRIMSON, 5.0, true)
+		var bar := PackedVector2Array([Vector2(0, h - 50), Vector2(w, h - 62), Vector2(w, h), Vector2(0, h)])
+		draw_colored_polygon(bar, plate)
+		draw_line(bar[0], bar[1], CRIMSON, 4.0, true)
 		if stripe <= 0.01:
 			return
 		var mid := h * 0.5 - BANNER_LIFT
-		var half := 92.0 * stripe
-		var slant := 60.0
-		var quad := PackedVector2Array([Vector2(-slant, mid - half + slant * 0.4), Vector2(w + slant, mid - half - slant * 0.4),
-			Vector2(w + slant, mid + half - slant * 0.4), Vector2(-slant, mid + half + slant * 0.4)])
-		draw_colored_polygon(quad, Color(CRIMSON, 0.9))
-		draw_line(quad[0], quad[1], Color.WHITE, 5.0, true)
-		draw_line(quad[3], quad[2], Color.WHITE, 5.0, true)
+		var half := 120.0 * stripe
+		var slant := 90.0 * lean
+		# Not quite parallel edges: the slash is fatter at one end.
+		var quad := PackedVector2Array([Vector2(-60, mid - half + slant), Vector2(w + 60, mid - half - slant),
+			Vector2(w + 60, mid + half - slant - half * 0.12), Vector2(-60, mid + half + slant + half * 0.2)])
+		draw_colored_polygon(quad, Color(CRIMSON, 0.7))
+		draw_line(quad[0], quad[1], Color(1, 1, 1, 0.85), 6.0, true)
+		draw_line(quad[3], quad[2], Color(1, 1, 1, 0.85), 6.0, true)
 
 
 class RouletteWheel extends Control:
@@ -277,9 +289,9 @@ func _ready() -> void:
 	var tl := VBoxContainer.new()
 	tl.position = Vector2(24, 18)
 	root.add_child(tl)
-	round_label = _label(tl, 26)
-	score_label = _label(tl, 36, Color(1, 0.9, 0.3))
-	board_label = _label(tl, 18, Color(1, 1, 1, 0.8))
+	round_label = _label(tl, 34)
+	score_label = _label(tl, 50, Color(1, 0.9, 0.3))
+	board_label = _label(tl, 24, Color(1, 1, 1, 0.8))
 	var vel := VBoxContainer.new()
 	_gauges.append(vel)
 	vel.custom_minimum_size.x = 170
@@ -289,24 +301,28 @@ func _ready() -> void:
 	gimbal.custom_minimum_size = Vector2(170, 150)
 	gimbal.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vel.add_child(gimbal)
-	velocity_label = _label(vel, 30)
-	path_label = _label(vel, 20)
+	velocity_label = _label(vel, 32)
+	path_label = _label(vel, 22)
 	for l in [velocity_label, path_label]:
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vel.scale = Vector2.ONE * 1.2
+	_tilt(tl, -3.0, false)
 
 	var tr := VBoxContainer.new()
 	tr.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	tr.offset_left = -320
-	tr.offset_right = -24
+	tr.offset_left = -440
+	tr.offset_right = -28
 	tr.offset_top = 18
 	root.add_child(tr)
-	alt_label = _label(tr, 30)
+	alt_label = _label(tr, 40)
 	_gauges.append(alt_label)
-	wings_label = _label(tr, 26)
-	mods_label = _label(tr, 24, Color(1, 0.6, 0.25))
-	mult_label = _label(tr, 52, Color(1, 0.4, 0.75))
+	wings_label = _label(tr, 34)
+	mods_label = _label(tr, 32, Color(1, 0.6, 0.25))
+	mult_label = _label(tr, 72, Color(1, 0.4, 0.75))
 	for l in [alt_label, wings_label, mods_label, mult_label]:
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_tilt(tr, 2.5)
+	_tilt(mult_label, 7.0)
 
 	wind_arrow = WindArrow.new()
 	wind_arrow.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -315,12 +331,14 @@ func _ready() -> void:
 	wind_arrow.offset_top = 12
 	wind_arrow.offset_bottom = 102
 	root.add_child(wind_arrow)
-	wind_label = _label(root, 20)
+	wind_label = _label(root, 26)
 	wind_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	wind_label.offset_left = -120
 	wind_label.offset_right = 120
 	wind_label.offset_top = 102
 	wind_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_tilt(wind_label, -4.0)
+	wind_arrow.modulate.a = HUD_ALPHA
 
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -331,15 +349,17 @@ func _ready() -> void:
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(col)
 	_banner_box = col
-	banner = _label(col, 84, Color(1, 0.95, 0.4))
+	col.modulate.a = BANNER_ALPHA
+	banner = _label(col, 116, Color(1, 0.95, 0.4))
 	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	sub_banner = _label(col, 28)
+	sub_banner = _label(col, 38)
 	sub_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
-	help = _label(root, 20, Color(1, 1, 1, 0.85))
+	help = _label(root, 19, Color(1, 1, 1, 0.85))
 	help.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	help.offset_top = -40
+	help.offset_top = -46
 	help.offset_bottom = -12
+	_tilt(help, -0.6)
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 	wheel = RouletteWheel.new()
@@ -351,14 +371,16 @@ func _ready() -> void:
 	wheel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wheel.visible = false
 	root.add_child(wheel)
-	wheel_title = _label(wheel, 34, Color(1, 0.95, 0.4))
+	wheel_title = _label(wheel, 44, Color(1, 0.95, 0.4))
 	wheel_title.position = Vector2(-270, -44)
 	wheel_title.size.x = 1000
-	wheel_result = _label(wheel, 34)
-	wheel_result.position = Vector2(0, 450)
-	wheel_result.size.x = 460
+	wheel_result = _label(wheel, 38)
+	wheel_result.position = Vector2(-270, 446)
+	wheel_result.size.x = 1000
 	for l in [wheel_title, wheel_result]:
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_tilt(wheel_title, -3.0)
+	_tilt(wheel_result, 2.0)
 
 	gamepad = not Input.get_connected_joypads().is_empty()
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
@@ -406,6 +428,15 @@ func _refresh_prompts() -> void:
 	var names := pad_names() if gamepad else KEYBOARD_NAMES
 	help.text = (GAMEPAD_HELP if gamepad else KEYBOARD_HELP).format(names)
 	sub_banner.text = _sub_text.format(names)
+
+
+## Knocks a HUD piece a little off square and lets the view show through it.
+## centred: turn about its middle (kept there as it resizes), else its corner.
+func _tilt(c: Control, degrees: float, centred := true) -> void:
+	c.rotation = deg_to_rad(degrees)
+	c.modulate.a = HUD_ALPHA
+	if centred:
+		c.resized.connect(func() -> void: c.pivot_offset = c.size * 0.5)
 
 
 func _label(parent: Control, size: int, color := Color.WHITE) -> Label:
@@ -457,12 +488,13 @@ func impact(strength: float) -> void:
 
 ## Comic sound-effect lettering stamped over the action.
 func pop(text: String, color := Color.WHITE) -> void:
-	var l := _label(_hud_root, 60, color)
-	l.add_theme_constant_override("outline_size", 16)
+	var l := _label(_hud_root, 82, color)
+	l.add_theme_constant_override("outline_size", 20)
+	l.modulate.a = BANNER_ALPHA
 	l.text = text
 	var vp := _hud_root.size
 	l.position = Vector2(vp.x * randf_range(0.15, 0.62), vp.y * randf_range(0.2, 0.62))
-	l.rotation = randf_range(-0.3, 0.3)
+	l.rotation = randf_range(-0.4, 0.4)
 	l.pivot_offset = l.get_minimum_size() * 0.5
 	l.scale = Vector2.ONE * 2.2
 	var t := create_tween()
@@ -553,10 +585,15 @@ func show_banner(text: String, sub := "", color := Color(1, 0.95, 0.4), hold := 
 	sub_banner.modulate.a = 1.0
 	deco.stripe = 0.0
 	if text != "":
-		# Slams down: lands on the next frame, once the box knows its new size.
+		# Slams down at a fresh wonky angle, wobbling as it lands; the pivot is
+		# set on the next frame, once the box knows its new size.
+		var tilt := deg_to_rad(randf_range(-BANNER_TILT, BANNER_TILT))
+		deco.lean = randf_range(-1.0, 1.0)
 		_banner_box.scale = Vector2.ONE * 2.0
+		_banner_box.rotation = tilt - signf(tilt + 0.001) * 0.25
 		_slam_tween = create_tween().set_parallel(true)
 		_slam_tween.tween_property(_banner_box, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		_slam_tween.tween_property(_banner_box, "rotation", tilt, 0.45).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 		_slam_tween.tween_property(deco, "stripe", 1.0, 0.12)
 		_center_banner_pivot.call_deferred()
 	if hold > 0.0:
